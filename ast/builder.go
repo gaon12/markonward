@@ -24,10 +24,10 @@ func NewBuilder(profile string, source []byte, borrow bool) *Builder {
 		profile:  profile,
 		source:   source,
 		borrowed: borrow,
-		// Forty-eight nodes cover typical short documents without making every
-		// parser-only call pay for the former 64-node backing array. The chosen
-		// capacity also preserves efficient slice growth for larger documents.
-		nodes: make([]nodeRecord, 1, 48),
+		// Twenty-four nodes cover typical short documents. Larger documents grow
+		// geometrically without making every parser-only call retain unused arena
+		// records.
+		nodes: make([]nodeRecord, 1, 24),
 	}
 	builder := &Builder{document: document}
 	root := builder.Add(DocumentKind, Span{Start: 0, End: len(source)})
@@ -67,7 +67,9 @@ func (b *Builder) AppendChild(parent, child NodeID) {
 	if parent == child {
 		panic("ast: a node cannot parent itself")
 	}
-	b.Detach(child)
+	if b.document.nodes[child].parent != NoNode {
+		b.Detach(child)
+	}
 	p := &b.document.nodes[parent]
 	c := &b.document.nodes[child]
 	c.parent = parent

@@ -53,7 +53,11 @@ controlled host.
 
 ## Current snapshot
 
-The local optimization run on 2026-07-21 showed substantially lower bytes and
-allocations in the representative corpora, but timing varied heavily on the
-shared/old Windows host. Results are deliberately not marketed as a stable
-number. The release workflow reruns the gate, and no v1 tag may bypass it.
+The final 10-sample local run on 2026-07-21 produced parser geometric-mean
+ratios of `0.746x ns/op`, `0.743x B/op`, and `0.304x allocs/op`; parse+HTML
+produced `0.714x`, `0.520x`, and `0.537x`. The gate still failed because
+parser-only `readme` measured `1.589x ns/op`, above the per-fixture ceiling.
+The old two-core Windows host varied by more than 20x on identical workloads;
+the previously failing `small` fixture moved to `0.778x ns/op`, 3072 B/op, and
+13 allocs/op. A controlled 10-sample timing rerun remains required. Results are
+not marketed as stable numbers, and no v1 tag may bypass the gate.

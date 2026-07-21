@@ -74,7 +74,7 @@ func extractGFMExamples(specification string) ([]specificationExample, error) {
 	const fence = "````````````````````````````````"
 	lines := strings.SplitAfter(strings.ReplaceAll(specification, "\r\n", "\n"), "\n")
 	section := ""
-	examples := make([]specificationExample, 0, 649)
+	examples := make([]specificationExample, 0, 671)
 	for index := 0; index < len(lines); index++ {
 		line := strings.TrimSuffix(lines[index], "\n")
 		if strings.HasPrefix(line, "## ") {
