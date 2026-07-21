@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/gaon12/markonward/ast"
+	"github.com/gaon12/markonward/extension"
+	baserenderer "github.com/gaon12/markonward/renderer"
 )
 
 // Option configures a plain-text renderer.
@@ -22,6 +24,16 @@ func WithoutLinkDestinations() Option {
 // Renderer produces content-oriented plain text.
 type Renderer struct {
 	includeLinkDestination bool
+	handlers               baserenderer.ExtensionSet
+}
+
+// NewWithExtensions constructs a renderer with immutable custom-node handlers.
+func NewWithExtensions(extensions ...extension.Extension) (*Renderer, error) {
+	handlers, err := baserenderer.CompileExtensions(extensions...)
+	if err != nil {
+		return nil, err
+	}
+	return &Renderer{includeLinkDestination: true, handlers: handlers}, nil
 }
 
 // New constructs a renderer that includes link destinations.
@@ -178,7 +190,14 @@ func (s *renderState) node(id ast.NodeID, depth int) error { //nolint:gocyclo //
 			s.output.WriteString("[ ] ")
 		}
 	case ast.Custom:
-		return fmt.Errorf("plaintext: no handler for custom node %q", node.CustomKind())
+		handler, ok := s.renderer.handlers.Handler(node.CustomKind())
+		if !ok {
+			return fmt.Errorf("plaintext: no handler for custom node %q", node.CustomKind())
+		}
+		return baserenderer.RenderCustom(handler, baserenderer.ExtensionContext{
+			RenderContext: s.ctx, Output: &s.output, AST: s.document,
+			Children: func(parent ast.NodeID) error { return s.children(parent, depth) },
+		}, id)
 	default:
 		return fmt.Errorf("plaintext: unsupported node kind %s", node.Kind())
 	}

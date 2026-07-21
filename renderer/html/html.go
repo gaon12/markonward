@@ -11,6 +11,8 @@ import (
 	"unicode"
 
 	"github.com/gaon12/markonward/ast"
+	"github.com/gaon12/markonward/extension"
+	baserenderer "github.com/gaon12/markonward/renderer"
 )
 
 // Option configures an HTML Renderer.
@@ -29,8 +31,19 @@ func WithXHTML() Option {
 
 // Renderer is immutable after construction and safe for concurrent use.
 type Renderer struct {
-	unsafe bool
-	xhtml  bool
+	unsafe   bool
+	xhtml    bool
+	handlers baserenderer.ExtensionSet
+}
+
+// NewWithExtensions constructs a safe renderer with immutable custom-node
+// handlers. A render registration ID must equal the custom AST kind it handles.
+func NewWithExtensions(extensions ...extension.Extension) (*Renderer, error) {
+	handlers, err := baserenderer.CompileExtensions(extensions...)
+	if err != nil {
+		return nil, err
+	}
+	return &Renderer{handlers: handlers}, nil
 }
 
 // New constructs a safe HTML renderer.
@@ -192,7 +205,14 @@ func (s *renderState) node(id ast.NodeID, context renderContext) error { //nolin
 		}
 		return s.write(`<input disabled="" type="checkbox"` + checked + "> ")
 	case ast.Custom:
-		return fmt.Errorf("html: no handler for custom node %q", node.CustomKind())
+		handler, ok := s.renderer.handlers.Handler(node.CustomKind())
+		if !ok {
+			return fmt.Errorf("html: no handler for custom node %q", node.CustomKind())
+		}
+		return baserenderer.RenderCustom(handler, baserenderer.ExtensionContext{
+			RenderContext: s.ctx, Output: s.writer, AST: s.document,
+			Children: func(parent ast.NodeID) error { return s.children(parent, context) },
+		}, id)
 	}
 	return fmt.Errorf("html: unsupported node kind %s", node.Kind())
 }

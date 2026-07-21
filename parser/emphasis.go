@@ -1,9 +1,10 @@
 package parser
 
+import "bytes"
+
 type emphasisDelimiter struct {
 	start     int
 	marker    byte
-	original  int
 	remaining int
 	closed    int
 	canOpen   bool
@@ -19,22 +20,51 @@ type emphasisPair struct {
 }
 
 type emphasisPlan struct {
-	openers map[int]emphasisPair
+	inline   [8]emphasisPair
+	count    int
+	overflow []emphasisPair
+}
+
+type emphasisDelimiters struct {
+	inline   [12]emphasisDelimiter
+	count    int
+	overflow []emphasisDelimiter
+}
+
+func (d *emphasisDelimiters) add(delimiter emphasisDelimiter) {
+	if d.count < len(d.inline) {
+		d.inline[d.count] = delimiter
+		d.count++
+		return
+	}
+	d.overflow = append(d.overflow, delimiter)
+}
+
+func (d *emphasisDelimiters) len() int { return d.count + len(d.overflow) }
+
+func (d *emphasisDelimiters) at(index int) *emphasisDelimiter {
+	if index < d.count {
+		return &d.inline[index]
+	}
+	return &d.overflow[index-d.count]
 }
 
 func (p *inlineParser) planEmphasis(start, end int) emphasisPlan {
-	delimiters := make([]emphasisDelimiter, 0, 8)
+	if bytes.IndexByte(p.input.data[start:end], '*') < 0 && bytes.IndexByte(p.input.data[start:end], '_') < 0 {
+		return emphasisPlan{}
+	}
+	var delimiters emphasisDelimiters
 	p.collectEmphasisDelimiters(start, end, &delimiters)
-	pairs := make(map[int]emphasisPair, len(delimiters)/2)
-	for closerIndex := range delimiters {
-		closer := &delimiters[closerIndex]
+	var plan emphasisPlan
+	for closerIndex := 0; closerIndex < delimiters.len(); closerIndex++ {
+		closer := delimiters.at(closerIndex)
 		if !closer.canClose {
 			continue
 		}
 		for closer.remaining > 0 {
 			openerIndex := -1
 			for candidate := closerIndex - 1; candidate >= 0; candidate-- {
-				opener := &delimiters[candidate]
+				opener := delimiters.at(candidate)
 				if opener.marker != closer.marker || !opener.canOpen || opener.remaining == 0 {
 					continue
 				}
@@ -47,7 +77,7 @@ func (p *inlineParser) planEmphasis(start, end int) emphasisPlan {
 			if openerIndex < 0 {
 				break
 			}
-			opener := &delimiters[openerIndex]
+			opener := delimiters.at(openerIndex)
 			use := 1
 			if opener.remaining >= 2 && closer.remaining >= 2 {
 				use = 2
@@ -55,18 +85,41 @@ func (p *inlineParser) planEmphasis(start, end int) emphasisPlan {
 			openStart := opener.start + opener.remaining - use
 			closeStart := closer.start + closer.closed
 			pair := emphasisPair{openStart: openStart, openLength: use, closeStart: closeStart, closeLength: use, kind: closer.marker}
-			pairs[openStart] = pair
+			plan.add(pair)
 			opener.remaining -= use
 			closer.remaining -= use
 			closer.closed += use
 			// Delimiters left unmatched between a completed opener/closer pair
 			// cannot later reach across the new emphasis node.
 			for between := openerIndex + 1; between < closerIndex; between++ {
-				delimiters[between].remaining = 0
+				delimiters.at(between).remaining = 0
 			}
 		}
 	}
-	return emphasisPlan{openers: pairs}
+	return plan
+}
+
+func (p *emphasisPlan) add(pair emphasisPair) {
+	if p.count < len(p.inline) {
+		p.inline[p.count] = pair
+		p.count++
+		return
+	}
+	p.overflow = append(p.overflow, pair)
+}
+
+func (p *emphasisPlan) openerAt(position int) (emphasisPair, bool) {
+	for index := 0; index < p.count; index++ {
+		if p.inline[index].openStart == position {
+			return p.inline[index], true
+		}
+	}
+	for _, pair := range p.overflow {
+		if pair.openStart == position {
+			return pair, true
+		}
+	}
+	return emphasisPair{}, false
 }
 
 func emphasisOddMatch(opener, closer emphasisDelimiter) bool {
@@ -76,7 +129,7 @@ func emphasisOddMatch(opener, closer emphasisDelimiter) bool {
 	return (opener.remaining+closer.remaining)%3 == 0 && (opener.remaining%3 != 0 || closer.remaining%3 != 0)
 }
 
-func (p *inlineParser) collectEmphasisDelimiters(start, end int, delimiters *[]emphasisDelimiter) {
+func (p *inlineParser) collectEmphasisDelimiters(start, end int, delimiters *emphasisDelimiters) {
 	for position := start; position < end; {
 		current := p.input.data[position]
 		switch current {
@@ -123,8 +176,8 @@ func (p *inlineParser) collectEmphasisDelimiters(start, end int, delimiters *[]e
 		case '*', '_':
 			run := byteRun(p.input.data, position, end, current)
 			canOpen, canClose := delimiterFlanking(p.input.data, position, run, current, 0, end)
-			*delimiters = append(*delimiters, emphasisDelimiter{
-				start: position, marker: current, original: run, remaining: run, canOpen: canOpen, canClose: canClose,
+			delimiters.add(emphasisDelimiter{
+				start: position, marker: current, remaining: run, canOpen: canOpen, canClose: canClose,
 			})
 			position += run
 		default:

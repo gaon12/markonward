@@ -109,16 +109,22 @@ type inlineParser struct {
 
 func (p *inlineParser) parseRange(parent ast.NodeID, start, end int) error {
 	plan := p.planEmphasis(start, end)
-	return p.parseRangeWithPlan(parent, start, end, plan)
+	return p.parseRangeWithPlan(parent, start, end, &plan)
 }
 
-func (p *inlineParser) parseRangeWithPlan(parent ast.NodeID, start, end int, plan emphasisPlan) error {
+func (p *inlineParser) parseRangeWithPlan(parent ast.NodeID, start, end int, plan *emphasisPlan) error {
 	for position := start; position < end; {
 		if err := p.state.checkContext(); err != nil {
 			return err
 		}
 		current := p.input.data[position]
-		if pair, matched := plan.openers[position]; matched && pair.closeStart < end {
+		if next, matched, err := p.parseExtensionInline(parent, position, end); err != nil {
+			return err
+		} else if matched {
+			position = next
+			continue
+		}
+		if pair, matched := plan.openerAt(position); matched && pair.closeStart < end {
 			if err := p.emitDelimiterFound(pair.openStart, pair.openLength, pair.kind); err != nil {
 				return err
 			}
@@ -237,10 +243,10 @@ func (p *inlineParser) parseRangeWithPlan(parent ast.NodeID, start, end int, pla
 	return nil
 }
 
-func (p *inlineParser) literalDelimiterRun(start, end int, marker byte, plan emphasisPlan) int {
+func (p *inlineParser) literalDelimiterRun(start, end int, marker byte, plan *emphasisPlan) int {
 	run := byteRun(p.input.data, start, end, marker)
 	for offset := 1; offset < run; offset++ {
-		if _, planned := plan.openers[start+offset]; planned {
+		if _, planned := plan.openerAt(start + offset); planned {
 			return offset
 		}
 	}
@@ -250,6 +256,9 @@ func (p *inlineParser) literalDelimiterRun(start, end int, marker byte, plan emp
 func (p *inlineParser) appendPlainRun(parent ast.NodeID, start, end int) int {
 	position := start + 1
 	for position < end && !isInlineSpecial(p.input.data[position], p.state.parser.profile) {
+		if p.hasInlineExtensionTrigger(p.input.data[position]) {
+			break
+		}
 		if p.state.parser.profile.Has(profile.ExtendedAutolinks) && isAutolinkBoundary(p.input.data, position) && hasExtendedAutolinkStart(p.input.data[position:end]) {
 			break
 		}
@@ -274,6 +283,15 @@ func (p *inlineParser) appendPlainRun(parent ast.NodeID, start, end int) int {
 	}
 	p.appendSource(parent, start, position)
 	return position
+}
+
+func (p *inlineParser) hasInlineExtensionTrigger(current byte) bool {
+	for _, registration := range p.state.parser.inlineHooks {
+		if extensionTriggered(registration.Triggers, current) {
+			return true
+		}
+	}
+	return false
 }
 
 func isAutolinkBoundary(data []byte, position int) bool {
@@ -559,33 +577,39 @@ func (p *inlineParser) parseLink(parent ast.NodeID, start, end int, image bool) 
 		return start, false, p.unclosedStructural(start, ast.Image, image)
 	}
 	labelStart := labelOpen + 1
-	label := string(p.input.data[labelStart:labelClose])
 	next := labelClose + 1
 	destination, title := "", ""
 	matched := false
-	if next < end && p.input.data[next] == '(' {
+	switch {
+	case next < end && p.input.data[next] == '(':
 		var parsed bool
 		destination, title, next, parsed = parseInlineLink(p.input.data, next+1, end)
 		if parsed {
 			matched = true
-		} else if reference, ok := p.state.references[normalizeReference(label)]; ok {
-			destination, title, matched = reference.destination, reference.title, true
-			next = labelClose + 1
+		} else {
+			label := string(p.input.data[labelStart:labelClose])
+			if reference, ok := p.state.references[normalizeReference(label)]; ok {
+				destination, title, matched = reference.destination, reference.title, true
+				next = labelClose + 1
+			}
 		}
-	} else if next < end && p.input.data[next] == '[' {
+	case next < end && p.input.data[next] == '[':
 		closing := findClosingBracket(p.input.data, next+1, end)
 		if closing >= 0 {
 			key := string(p.input.data[next+1 : closing])
 			if key == "" {
-				key = label
+				key = string(p.input.data[labelStart:labelClose])
 			}
 			if reference, ok := p.state.references[normalizeReference(key)]; ok {
 				destination, title, matched = reference.destination, reference.title, true
 				next = closing + 1
 			}
 		}
-	} else if reference, ok := p.state.references[normalizeReference(label)]; ok {
-		destination, title, matched = reference.destination, reference.title, true
+	default:
+		label := string(p.input.data[labelStart:labelClose])
+		if reference, ok := p.state.references[normalizeReference(label)]; ok {
+			destination, title, matched = reference.destination, reference.title, true
+		}
 	}
 	if !matched {
 		return start, false, nil
@@ -637,13 +661,13 @@ func (p *inlineParser) linkSyntaxEnd(start, end int) (int, bool) {
 	if labelClose < 0 {
 		return start, false
 	}
-	label := string(p.input.data[start+1 : labelClose])
 	next := labelClose + 1
 	if next < end && p.input.data[next] == '(' {
-		_, _, parsedEnd, ok := parseInlineLink(p.input.data, next+1, end)
+		parsedEnd, ok := inlineLinkSyntaxEnd(p.input.data, next+1, end)
 		if ok {
 			return parsedEnd, true
 		}
+		label := string(p.input.data[start+1 : labelClose])
 		_, ok = p.state.references[normalizeReference(label)]
 		return next, ok
 	}
@@ -654,11 +678,12 @@ func (p *inlineParser) linkSyntaxEnd(start, end int) (int, bool) {
 		}
 		key := string(p.input.data[next+1 : closing])
 		if key == "" {
-			key = label
+			key = string(p.input.data[start+1 : labelClose])
 		}
 		_, ok := p.state.references[normalizeReference(key)]
 		return closing + 1, ok
 	}
+	label := string(p.input.data[start+1 : labelClose])
 	_, ok := p.state.references[normalizeReference(label)]
 	return next, ok
 }
@@ -1033,18 +1058,45 @@ func matchingCodeSpanEnd(data []byte, start, end int) (int, bool) {
 	return start, false
 }
 
+type inlineLinkParts struct {
+	destinationStart int
+	destinationEnd   int
+	titleStart       int
+	titleEnd         int
+	next             int
+	hasTitle         bool
+}
+
+func inlineLinkSyntaxEnd(data []byte, start, end int) (int, bool) {
+	parts, ok := scanInlineLink(data, start, end)
+	return parts.next, ok
+}
+
 func parseInlineLink(data []byte, start, end int) (destination, title string, next int, ok bool) {
-	position, validSpace := skipLinkSpace(data, start, end)
-	if !validSpace {
+	parts, ok := scanInlineLink(data, start, end)
+	if !ok {
 		return "", "", start, false
 	}
+	destination = string(data[parts.destinationStart:parts.destinationEnd])
+	if parts.hasTitle {
+		title = string(data[parts.titleStart:parts.titleEnd])
+	}
+	return destination, title, parts.next, true
+}
+
+func scanInlineLink(data []byte, start, end int) (inlineLinkParts, bool) {
+	position, validSpace := skipLinkSpace(data, start, end)
+	if !validSpace {
+		return inlineLinkParts{}, false
+	}
 	destinationStart := position
+	var destinationEnd int
 	if position < end && data[position] == '<' {
 		position++
 		destinationStart = position
 		for position < end && data[position] != '>' {
 			if data[position] == '\n' || data[position] == '<' {
-				return "", "", start, false
+				return inlineLinkParts{}, false
 			}
 			if data[position] == '\\' && position+1 < end {
 				position += 2
@@ -1053,9 +1105,9 @@ func parseInlineLink(data []byte, start, end int) (destination, title string, ne
 			position++
 		}
 		if position >= end {
-			return "", "", start, false
+			return inlineLinkParts{}, false
 		}
-		destination = string(data[destinationStart:position])
+		destinationEnd = position
 		position++
 	} else {
 		depth := 0
@@ -1079,16 +1131,16 @@ func parseInlineLink(data []byte, start, end int) (destination, title string, ne
 			position++
 		}
 		if depth != 0 {
-			return "", "", start, false
+			return inlineLinkParts{}, false
 		}
-		destination = string(data[destinationStart:position])
+		destinationEnd = position
 	}
 	if position < end && data[position] == ')' {
-		return destination, "", position + 1, true
+		return inlineLinkParts{destinationStart: destinationStart, destinationEnd: destinationEnd, next: position + 1}, true
 	}
 	afterSpace, validSpace := skipLinkSpace(data, position, end)
 	if !validSpace || afterSpace == position || afterSpace >= end {
-		return "", "", start, false
+		return inlineLinkParts{}, false
 	}
 	position = afterSpace
 	opening := data[position]
@@ -1096,7 +1148,7 @@ func parseInlineLink(data []byte, start, end int) (destination, title string, ne
 	if opening == '(' {
 		closing = ')'
 	} else if opening != '"' && opening != '\'' {
-		return "", "", start, false
+		return inlineLinkParts{}, false
 	}
 	position++
 	titleStart := position
@@ -1106,20 +1158,23 @@ func parseInlineLink(data []byte, start, end int) (destination, title string, ne
 			continue
 		}
 		if opening == '(' && data[position] == '(' {
-			return "", "", start, false
+			return inlineLinkParts{}, false
 		}
 		position++
 	}
 	if position >= end {
-		return "", "", start, false
+		return inlineLinkParts{}, false
 	}
-	title = string(data[titleStart:position])
+	titleEnd := position
 	position++
 	position, validSpace = skipLinkSpace(data, position, end)
 	if !validSpace || position >= end || data[position] != ')' {
-		return "", "", start, false
+		return inlineLinkParts{}, false
 	}
-	return destination, title, position + 1, true
+	return inlineLinkParts{
+		destinationStart: destinationStart, destinationEnd: destinationEnd,
+		titleStart: titleStart, titleEnd: titleEnd, next: position + 1, hasTitle: true,
+	}, true
 }
 
 func skipLinkSpace(data []byte, start, end int) (int, bool) {

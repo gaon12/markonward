@@ -22,6 +22,7 @@ type inlineBlock struct {
 type parseState struct {
 	parser      *Parser
 	ctx         context.Context
+	done        <-chan struct{}
 	source      []byte
 	builder     *ast.Builder
 	borrowed    bool
@@ -32,8 +33,11 @@ type parseState struct {
 }
 
 func (s *parseState) checkContext() error {
+	if s.done == nil {
+		return nil
+	}
 	select {
-	case <-s.ctx.Done():
+	case <-s.done:
 		return s.ctx.Err()
 	default:
 		return nil

@@ -24,6 +24,11 @@ Unsafe mode is not an HTML sanitizer. If an application needs a different trust
 policy, keep safe mode enabled or sanitize after rendering with a policy-aware
 component outside this dependency-free core.
 
+Custom render handlers are trusted application code. They write directly to the
+destination and are not escaped by the built-in safe HTML policy. Do not enable
+an untrusted extension, and make each HTML handler apply context-appropriate
+escaping to source-derived values.
+
 ## Resource controls
 
 - Input must be valid UTF-8.
@@ -35,9 +40,9 @@ component outside this dependency-free core.
   normalization round trips.
 - Arena spans and relationships are validated before a document is returned.
 
-The current pre-v1 inline implementation is not yet proven linear for every
-adversarial delimiter pattern. Treat input limits and request deadlines as part
-of deployment policy even after fuzzing.
+The inline delimiter planner is not yet proven linear for every adversarial
+pattern. Treat input limits and request deadlines as part of deployment policy
+even after fuzzing.
 
 ## Source ownership and data races
 

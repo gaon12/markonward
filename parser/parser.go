@@ -32,7 +32,9 @@ type Parser struct {
 	traceSink    trace.Sink
 	traceLevel   trace.Level
 	recovery     map[ast.Kind]RecoveryPolicy
-	extensions   extension.Set
+	blockHooks   []extension.Registration
+	inlineHooks  []extension.Registration
+	transforms   []extension.Registration
 	maxInputSize int64
 }
 
@@ -69,7 +71,9 @@ func New(selected profile.Profile, options ...Option) (*Parser, error) {
 		traceSink:    configuration.traceSink,
 		traceLevel:   configuration.traceLevel,
 		recovery:     recovery,
-		extensions:   extensions,
+		blockHooks:   extensions.Registrations(extension.BlockPhase),
+		inlineHooks:  extensions.Registrations(extension.InlinePhase),
+		transforms:   extensions.Registrations(extension.TransformPhase),
 		maxInputSize: configuration.maxInputSize,
 	}, nil
 }
@@ -124,12 +128,12 @@ func (p *Parser) parse(ctx context.Context, source []byte, borrow bool) (Result,
 	}
 	builder := ast.NewBuilder(p.profile.ID(), source, borrow)
 	state := parseState{
-		parser:     p,
-		ctx:        ctx,
-		source:     builder.Document().Source(),
-		builder:    builder,
-		borrowed:   borrow,
-		references: make(map[string]reference),
+		parser:   p,
+		ctx:      ctx,
+		done:     ctx.Done(),
+		source:   builder.Document().Source(),
+		builder:  builder,
+		borrowed: borrow,
 	}
 	if err := state.parseBlocks(scanLines(source), state.builder.Document().Root()); err != nil {
 		return Result{}, err
@@ -137,7 +141,7 @@ func (p *Parser) parse(ctx context.Context, source []byte, borrow bool) (Result,
 	if err := state.parseInlines(); err != nil {
 		return Result{}, err
 	}
-	for _, registration := range p.extensions.Registrations(extension.TransformPhase) {
+	for _, registration := range p.transforms {
 		transformer := registration.Handler.(extension.ASTTransformer)
 		if err := transformer.Transform(ctx, state.builder); err != nil {
 			return Result{}, fmt.Errorf("parser: transform %s: %w", registration.ID, err)

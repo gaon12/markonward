@@ -50,6 +50,12 @@ func (s *parseState) parseBlocks(lines []sourceLine, parent ast.NodeID) error {
 			index++
 			continue
 		}
+		if next, matched, err := s.parseExtensionBlock(lines, index, parent); err != nil {
+			return err
+		} else if matched {
+			index = next
+			continue
+		}
 		if marker, info, ok := fenceStart(content); ok {
 			next, err := s.parseFence(lines, index, parent, marker, info)
 			if err != nil {
@@ -156,6 +162,9 @@ func (s *parseState) parseBlocks(lines []sourceLine, parent ast.NodeID) error {
 		if definition, next, ok := s.parseReferenceDefinition(lines, index); ok {
 			key := normalizeReference(definition.label)
 			if _, exists := s.references[key]; !exists {
+				if s.references == nil {
+					s.references = make(map[string]reference)
+				}
 				s.references[key] = reference{destination: definition.destination, title: definition.title}
 			}
 			index = next

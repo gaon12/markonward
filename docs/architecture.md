@@ -10,7 +10,7 @@ profile ─┐
 trace ───┤              ├─── renderer/plaintext
 diagnostic┘              └─── renderer/markdown
 
-extension ─> parser transform pipeline
+extension ─> parser syntax/transform pipeline + custom render handlers
 markonward ─> optional parser + renderer composition
 cmd/markonward ─> CLI only
 ```
@@ -51,8 +51,8 @@ diagnostics rather than a fatal error unless a rule's policy is `Error`.
 ## Pipeline
 
 1. Validate context, input size, and UTF-8.
-2. Scan source lines and create source-mapped block nodes.
-3. Resolve references and parse pending inline spans sequentially.
+2. Scan source lines, dispatch matching block triggers, and create source-mapped block nodes.
+3. Resolve references, dispatch matching inline triggers, and process delimiter runs sequentially.
 4. Run registered AST transforms in deterministic priority order.
 5. Validate and freeze the arena.
 6. Renderers walk the immutable document independently.
@@ -67,14 +67,20 @@ serialize writes.
 `extension.Registry` rejects duplicate IDs and registrations with overlapping
 triggers at the same phase and priority. There is no global mutable registry.
 The API defines block, inline, transform, custom-node, and render contracts.
-Only the AST-transform dispatch is wired into the current pre-v1 parser; syntax
-and custom renderer dispatch remain a release blocker and must not be presented
-as stable runtime functionality yet.
+`parser.WithExtensions` freezes block, inline, and transform hooks when the
+parser is constructed. Syntax handlers receive a restricted context and must
+return a positive consumed length plus a valid node; block handlers must consume
+complete source lines. Inline handlers see original-source offsets and cannot
+consume across source gaps created by stripping container markers.
+`html.NewWithExtensions`,
+`plaintext.NewWithExtensions`, and `markdown.NewWithExtensions` compile render
+handlers without importing the parser. A render registration ID is the custom
+node kind it handles; the handler owns child traversal through `RenderChildren`.
 
 ## Complexity and limits
 
-The normal block scan and tree walk are linear in input/nodes. Inline delimiter
-search is currently simpler than the final CommonMark stack algorithm and can
-revisit suffixes on delimiter-heavy input. Fuzzing guards against panic,
-non-termination, and invalid spans; benchmark corpora track the cost until the
-stack implementation and full conformance gate are complete.
+The normal block scan and tree walk are linear in input/nodes. Inline emphasis
+uses a delimiter-run plan with fixed inline storage for ordinary paragraphs and
+overflow storage for adversarial input. Fuzzing guards against panic,
+non-termination, and invalid spans; the pinned CommonMark and GFM suites enforce
+the complete built-in syntax contracts.

@@ -9,14 +9,29 @@ import (
 	"strings"
 
 	"github.com/gaon12/markonward/ast"
+	"github.com/gaon12/markonward/extension"
 	"github.com/gaon12/markonward/profile"
+	baserenderer "github.com/gaon12/markonward/renderer"
 )
 
 // Renderer emits deterministic Markdown for one target profile.
-type Renderer struct{ profile profile.Profile }
+type Renderer struct {
+	profile  profile.Profile
+	handlers baserenderer.ExtensionSet
+}
 
 // New constructs a renderer. An invalid profile is reported by Render.
 func New(selected profile.Profile) *Renderer { return &Renderer{profile: selected} }
+
+// NewWithExtensions constructs a profile-aware renderer with immutable
+// custom-node handlers.
+func NewWithExtensions(selected profile.Profile, extensions ...extension.Extension) (*Renderer, error) {
+	handlers, err := baserenderer.CompileExtensions(extensions...)
+	if err != nil {
+		return nil, err
+	}
+	return &Renderer{profile: selected, handlers: handlers}, nil
+}
 
 // Render writes normalized Markdown.
 func (r *Renderer) Render(ctx context.Context, writer io.Writer, document *ast.Document) error {
@@ -124,7 +139,7 @@ func (s *renderState) block(id ast.NodeID) error { //nolint:gocyclo // The switc
 	case ast.Invalid, ast.DocumentKind, ast.Text, ast.SoftBreak, ast.HardBreak, ast.CodeSpan, ast.Emphasis, ast.Strong, ast.Strikethrough, ast.Link, ast.Image, ast.Autolink, ast.RawHTML, ast.TableHead, ast.TableBody, ast.TableRow, ast.TableCell, ast.TaskCheck:
 		return fmt.Errorf("markdown: unexpected block node %s", node.Kind())
 	case ast.Custom:
-		return fmt.Errorf("markdown: no handler for custom node %q", node.CustomKind())
+		return s.custom(id, func(parent ast.NodeID) error { return s.blocks(parent) })
 	default:
 		return fmt.Errorf("markdown: unsupported node %s", node.Kind())
 	}
@@ -205,11 +220,22 @@ func (s *renderState) inline(id ast.NodeID) error { //nolint:gocyclo // The swit
 	case ast.Invalid, ast.DocumentKind, ast.Paragraph, ast.Heading, ast.BlockQuote, ast.List, ast.ListItem, ast.ThematicBreak, ast.CodeBlock, ast.HTMLBlock, ast.Table, ast.TableHead, ast.TableBody, ast.TableRow:
 		return fmt.Errorf("markdown: unexpected inline node %s", node.Kind())
 	case ast.Custom:
-		return fmt.Errorf("markdown: no handler for custom node %q", node.CustomKind())
+		return s.custom(id, func(parent ast.NodeID) error { return s.inlines(parent) })
 	default:
 		return fmt.Errorf("markdown: unsupported inline node %s", node.Kind())
 	}
 	return nil
+}
+
+func (s *renderState) custom(id ast.NodeID, children func(ast.NodeID) error) error {
+	node := s.document.Node(id)
+	handler, ok := s.renderer.handlers.Handler(node.CustomKind())
+	if !ok {
+		return fmt.Errorf("markdown: no handler for custom node %q", node.CustomKind())
+	}
+	return baserenderer.RenderCustom(handler, baserenderer.ExtensionContext{
+		RenderContext: s.ctx, Output: &s.output, AST: s.document, Children: children,
+	}, id)
 }
 
 func (s *renderState) inlineContainer(id ast.NodeID, open, close string) error {
