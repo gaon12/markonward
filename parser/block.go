@@ -13,6 +13,8 @@ type sourceLine struct {
 	start, end, newlineEnd   int
 	contentStart, contentEnd int
 	lazy                     bool
+	logical                  []byte
+	offsets                  []int
 }
 
 func scanLines(source []byte) []sourceLine {
@@ -60,7 +62,7 @@ func (s *parseState) parseBlocks(lines []sourceLine, parent ast.NodeID) error {
 			node := s.builder.Add(ast.Heading, ast.Span{Start: line.contentStart, End: line.contentEnd})
 			s.builder.SetIntegers(node, level, 0)
 			s.builder.AppendChild(parent, node)
-			s.inlines = append(s.inlines, inlineBlock{node: node, spans: []ast.Span{{Start: line.contentStart + start, End: line.contentStart + end}}})
+			s.inlines = append(s.inlines, inlineBlock{node: node, spans: []ast.Span{{Start: lineSourceOffset(line, start), End: lineSourceOffset(line, end)}}})
 			index++
 			continue
 		}
@@ -85,7 +87,7 @@ func (s *parseState) parseBlocks(lines []sourceLine, parent ast.NodeID) error {
 				// current quote paragraph can consume the line. A new block or
 				// blank line ends that continuation.
 				candidate := s.lineBytes(lines[index])
-				if isBlank(candidate) || startsBlock(candidate) {
+				if isBlank(candidate) || startsBlock(candidate) || !s.quoteAllowsLazyContinuation(quoted) {
 					break
 				}
 				lazy := lines[index]
@@ -117,7 +119,7 @@ func (s *parseState) parseBlocks(lines []sourceLine, parent ast.NodeID) error {
 					break
 				}
 				if isBlank(candidate) {
-					codeLines = append(codeLines, "")
+					codeLines = append(codeLines, stripIndent(candidate, minInt(4, indentWidth(candidate))))
 				} else {
 					codeLines = append(codeLines, stripIndent(candidate, 4))
 				}
@@ -151,9 +153,12 @@ func (s *parseState) parseBlocks(lines []sourceLine, parent ast.NodeID) error {
 			s.builder.AppendChild(parent, node)
 			continue
 		}
-		if destination, title, label, ok := referenceDefinition(content); ok {
-			s.references[normalizeReference(label)] = reference{destination: destination, title: title}
-			index++
+		if definition, next, ok := s.parseReferenceDefinition(lines, index); ok {
+			key := normalizeReference(definition.label)
+			if _, exists := s.references[key]; !exists {
+				s.references[key] = reference{destination: definition.destination, title: definition.title}
+			}
+			index = next
 			continue
 		}
 		next, err := s.parseParagraph(lines, index, parent)
@@ -174,6 +179,49 @@ func (s *parseState) htmlBlockText(lines []sourceLine) string {
 		}
 	}
 	return output.String()
+}
+
+func (s *parseState) quoteAllowsLazyContinuation(lines []sourceLine) bool {
+	if len(lines) == 0 || isBlank(s.lineBytes(lines[len(lines)-1])) {
+		return false
+	}
+	var openFence string
+	for _, line := range lines {
+		leaf := quoteLeafContent(s.lineBytes(line))
+		if openFence != "" {
+			if isClosingFence(leaf, openFence) {
+				openFence = ""
+			}
+			continue
+		}
+		if marker, _, ok := fenceStart(leaf); ok {
+			openFence = marker
+		}
+	}
+	if openFence != "" {
+		return false
+	}
+	leaf := quoteLeafContent(s.lineBytes(lines[len(lines)-1]))
+	if isBlank(leaf) || indentWidth(leaf) >= 4 || startsBlock(leaf) {
+		return false
+	}
+	_, _, _, definition := referenceDefinition(leaf)
+	return !definition
+}
+
+func quoteLeafContent(content []byte) []byte {
+	for {
+		line := sourceLine{contentStart: 0, contentEnd: len(content)}
+		if stripped, ok := stripBlockQuote(line, content); ok {
+			content = content[stripped.contentStart:stripped.contentEnd]
+			continue
+		}
+		if marker, ok := parseListMarker(content); ok && marker.offset < len(content) {
+			content = content[marker.offset:]
+			continue
+		}
+		return content
+	}
 }
 
 func (s *parseState) parseParagraph(lines []sourceLine, start int, parent ast.NodeID) (int, error) {
@@ -197,8 +245,8 @@ func (s *parseState) parseParagraph(lines []sourceLine, start int, parent ast.No
 				}
 			}
 		}
-		contentStart := lines[index].contentStart + len(content) - len(bytes.TrimLeft(content, " \t"))
-		spans = append(spans, ast.Span{Start: contentStart, End: lines[index].contentEnd})
+		logicalStart := len(content) - len(bytes.TrimLeft(content, " \t"))
+		spans = append(spans, ast.Span{Start: lineSourceOffset(lines[index], logicalStart), End: lineSourceOffset(lines[index], len(content))})
 		index++
 	}
 	if len(spans) > 0 && index < len(lines) {
@@ -256,7 +304,7 @@ func (s *parseState) parseFence(lines []sourceLine, start int, parent ast.NodeID
 		}
 		return ""
 	}())
-	s.builder.SetTitle(node, info)
+	s.builder.SetTitle(node, decodeLinkText(info))
 	s.builder.SetIntegers(node, int(marker[0]), len(marker))
 	s.builder.AppendChild(parent, node)
 	return index, nil
@@ -280,6 +328,7 @@ type listMarker struct {
 	indent    int
 	width     int
 	offset    int
+	markerEnd int
 	delimiter byte
 }
 
@@ -290,22 +339,25 @@ func (s *parseState) parseList(lines []sourceLine, start int, parent ast.NodeID,
 	s.builder.AppendChild(parent, list)
 	loose := false
 	for index < len(lines) {
+		if index > start && isThematicBreak(s.lineBytes(lines[index])) {
+			break
+		}
 		marker, ok := parseListMarker(s.lineBytes(lines[index]))
 		if !ok || marker.ordered != first.ordered || marker.delimiter != first.delimiter {
 			break
 		}
 		itemStart := index
-		adjusted := lines[index]
-		adjusted.contentStart += marker.offset
+		adjusted := stripLineContainer(lines[index], s.source, marker.markerEnd, marker.width)
 		itemLines := []sourceLine{adjusted}
-		itemInitiallyEmpty := adjusted.contentStart == adjusted.contentEnd
+		itemInitiallyEmpty := len(s.lineBytes(adjusted)) == 0
+		openFence := ""
+		if fence, _, fenced := fenceStart(s.lineBytes(adjusted)); fenced {
+			openFence = fence
+		}
 		index++
 		blankPending := false
 		for index < len(lines) {
 			candidate := s.lineBytes(lines[index])
-			if isThematicBreak(candidate) {
-				break
-			}
 			if next, matched := parseListMarker(candidate); matched && next.indent < marker.width {
 				if next.ordered == first.ordered && next.delimiter == first.delimiter && blankPending {
 					loose = true
@@ -314,7 +366,9 @@ func (s *parseState) parseList(lines []sourceLine, start int, parent ast.NodeID,
 			}
 			if isBlank(candidate) {
 				itemLines = append(itemLines, lines[index])
-				blankPending = true
+				if openFence == "" {
+					blankPending = true
+				}
 				index++
 				continue
 			}
@@ -322,20 +376,30 @@ func (s *parseState) parseList(lines []sourceLine, start int, parent ast.NodeID,
 			if blankPending && itemInitiallyEmpty || indent < marker.width && (blankPending || startsBlock(candidate)) {
 				break
 			}
-			continuation := lines[index]
-			trim := byteOffsetForIndent(candidate, minInt(indent, marker.width))
-			continuation.contentStart += trim
+			remove := minInt(indent, marker.width)
+			continuation := stripLineContainer(lines[index], s.source, 0, remove)
 			if indent < marker.width {
 				continuation.lazy = true
 			}
 			itemLines = append(itemLines, continuation)
 			if blankPending && indent <= marker.width {
-				trimmed := s.source[continuation.contentStart:continuation.contentEnd]
+				loose = true
+			}
+			if blankPending && indent <= marker.width {
+				trimmed := s.lineBytes(continuation)
 				if _, _, _, definition := referenceDefinition(trimmed); definition {
 					loose = true
 				}
 			}
 			blankPending = false
+			adjustedContent := s.lineBytes(continuation)
+			if openFence != "" {
+				if isClosingFence(adjustedContent, openFence) {
+					openFence = ""
+				}
+			} else if fence, _, fenced := fenceStart(adjustedContent); fenced {
+				openFence = fence
+			}
 			index++
 		}
 		item := s.builder.Add(ast.ListItem, ast.Span{Start: lines[itemStart].start, End: lines[index-1].newlineEnd})
@@ -343,12 +407,12 @@ func (s *parseState) parseList(lines []sourceLine, start int, parent ast.NodeID,
 		if s.parser.profile.Has(profile.TaskLists) {
 			firstContent := s.lineBytes(itemLines[0])
 			if checked, consumed, ok := taskMarker(firstContent); ok {
-				check := s.builder.Add(ast.TaskCheck, ast.Span{Start: itemLines[0].contentStart, End: itemLines[0].contentStart + consumed})
+				check := s.builder.Add(ast.TaskCheck, ast.Span{Start: lineSourceOffset(itemLines[0], 0), End: lineSourceOffset(itemLines[0], consumed)})
 				if checked {
 					s.builder.SetFlags(check, ast.TaskChecked)
 				}
 				s.builder.AppendChild(item, check)
-				itemLines[0].contentStart += consumed
+				itemLines[0] = trimLinePrefix(itemLines[0], consumed)
 			}
 		}
 		if err := s.parseBlocks(itemLines, item); err != nil {
@@ -433,7 +497,98 @@ func (s *parseState) parseTable(lines []sourceLine, headerIndex, delimiterIndex 
 }
 
 func (s *parseState) lineBytes(line sourceLine) []byte {
+	if line.logical != nil {
+		return line.logical
+	}
 	return s.source[line.contentStart:line.contentEnd]
+}
+
+func lineSourceOffset(line sourceLine, logical int) int {
+	if line.offsets == nil {
+		return line.contentStart + logical
+	}
+	if logical < 0 {
+		logical = 0
+	}
+	if logical >= len(line.offsets) {
+		return line.offsets[len(line.offsets)-1]
+	}
+	return line.offsets[logical]
+}
+
+func trimLinePrefix(line sourceLine, count int) sourceLine {
+	if count <= 0 {
+		return line
+	}
+	if line.logical == nil {
+		line.contentStart += count
+		return line
+	}
+	if count > len(line.logical) {
+		count = len(line.logical)
+	}
+	line.logical = line.logical[count:]
+	line.offsets = line.offsets[count:]
+	line.contentStart = line.offsets[0]
+	line.contentEnd = line.offsets[len(line.offsets)-1]
+	return line
+}
+
+// stripLineContainer removes a block quote or list container by visual
+// columns. Tabs in the consumed indentation may straddle the boundary, so the
+// remaining columns are materialized as spaces while offsets keep mapping the
+// logical view back to the original source bytes.
+func stripLineContainer(line sourceLine, source []byte, markerEnd, containerWidth int) sourceLine {
+	content := source[line.contentStart:line.contentEnd]
+	if line.logical != nil {
+		content = line.logical
+	}
+	prefixEnd := markerEnd
+	for prefixEnd < len(content) && (content[prefixEnd] == ' ' || content[prefixEnd] == '\t') {
+		prefixEnd++
+	}
+	column := 0
+	for _, current := range content[:prefixEnd] {
+		if current == '\t' {
+			column += 4 - column%4
+		} else {
+			column++
+		}
+	}
+	remaining := column - containerWidth
+	if remaining < 0 {
+		remaining = 0
+	}
+	logical := make([]byte, remaining+len(content)-prefixEnd)
+	for index := 0; index < remaining; index++ {
+		logical[index] = ' '
+	}
+	copy(logical[remaining:], content[prefixEnd:])
+	oldOffsets := line.offsets
+	if oldOffsets == nil {
+		oldOffsets = make([]int, len(content)+1)
+		for index := range oldOffsets {
+			oldOffsets[index] = line.contentStart + index
+		}
+	}
+	offsets := make([]int, len(logical)+1)
+	indentSourceStart := oldOffsets[minInt(markerEnd, len(content))]
+	indentSourceEnd := oldOffsets[prefixEnd]
+	if remaining == 0 {
+		offsets[0] = indentSourceEnd
+	} else {
+		for index := 0; index <= remaining; index++ {
+			offsets[index] = indentSourceStart + (indentSourceEnd-indentSourceStart)*index/remaining
+		}
+	}
+	for index := 1; index <= len(content)-prefixEnd; index++ {
+		offsets[remaining+index] = oldOffsets[prefixEnd+index]
+	}
+	line.logical = logical
+	line.offsets = offsets
+	line.contentStart = offsets[0]
+	line.contentEnd = offsets[len(offsets)-1]
+	return line
 }
 
 func isBlank(line []byte) bool { return len(bytes.TrimSpace(line)) == 0 }
@@ -583,16 +738,19 @@ func fenceStart(line []byte) (marker, info string, ok bool) {
 
 func stripBlockQuote(line sourceLine, source []byte) (sourceLine, bool) {
 	content := source[line.contentStart:line.contentEnd]
+	if line.logical != nil {
+		content = line.logical
+	}
 	index := byteOffsetForIndent(content, 3)
 	if index >= len(content) || content[index] != '>' {
 		return sourceLine{}, false
 	}
-	index++
-	if index < len(content) && (content[index] == ' ' || content[index] == '\t') {
-		index++
+	markerEnd := index + 1
+	containerWidth := index + 1
+	if markerEnd < len(content) && (content[markerEnd] == ' ' || content[markerEnd] == '\t') {
+		containerWidth++
 	}
-	line.contentStart += index
-	return line, true
+	return stripLineContainer(line, source, markerEnd, containerWidth), true
 }
 
 func parseListMarker(line []byte) (listMarker, bool) {
@@ -609,7 +767,7 @@ func parseListMarker(line []byte) (listMarker, bool) {
 		if !ok {
 			return listMarker{}, false
 		}
-		return listMarker{indent: indent, width: indent + 1 + padding, offset: offset, delimiter: line[indent]}, true
+		return listMarker{indent: indent, width: indent + 1 + padding, offset: offset, markerEnd: markerEnd, delimiter: line[indent]}, true
 	}
 	index := indent
 	for index < len(line) && index-indent < 9 && line[index] >= '0' && line[index] <= '9' {
@@ -627,7 +785,7 @@ func parseListMarker(line []byte) (listMarker, bool) {
 	if err != nil {
 		return listMarker{}, false
 	}
-	return listMarker{ordered: true, start: start, indent: indent, width: markerEnd + padding, offset: offset, delimiter: line[index]}, true
+	return listMarker{ordered: true, start: start, indent: indent, width: markerEnd + padding, offset: offset, markerEnd: markerEnd, delimiter: line[index]}, true
 }
 
 func listMarkerPadding(line []byte, markerEnd, markerColumns int) (padding, offset int, ok bool) {
@@ -698,32 +856,18 @@ var commonMarkBlockTags = map[string]bool{
 }
 
 func referenceDefinition(line []byte) (destination, title, label string, ok bool) {
-	if indentWidth(line) > 3 {
+	parsed, parsedOK := parseReferenceDefinitionText(append(append([]byte(nil), line...), '\n'))
+	if !parsedOK {
 		return "", "", "", false
 	}
-	trimmed := strings.TrimSpace(string(line))
-	if !strings.HasPrefix(trimmed, "[") {
-		return "", "", "", false
-	}
-	separator := strings.Index(trimmed, "]:")
-	if separator <= 1 {
-		return "", "", "", false
-	}
-	label = trimmed[1:separator]
-	remainder := strings.TrimSpace(trimmed[separator+2:])
-	if remainder == "" {
-		return "", "", "", false
-	}
-	fields := strings.Fields(remainder)
-	destination = strings.Trim(fields[0], "<>")
-	if len(fields) > 1 {
-		title = strings.Trim(strings.Join(fields[1:], " "), "\"'()")
-	}
-	return destination, title, label, true
+	return parsed.destination, parsed.title, parsed.label, true
 }
 
 func normalizeReference(label string) string {
-	return strings.ToLower(strings.Join(strings.Fields(label), " "))
+	label = strings.ToLower(strings.Join(strings.Fields(label), " "))
+	// Unicode default case folding expands sharp s, while strings.ToLower
+	// intentionally performs only a one-rune mapping.
+	return strings.ReplaceAll(label, "ß", "ss")
 }
 
 func isTableDelimiter(line []byte) bool {

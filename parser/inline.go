@@ -108,11 +108,35 @@ type inlineParser struct {
 }
 
 func (p *inlineParser) parseRange(parent ast.NodeID, start, end int) error {
+	plan := p.planEmphasis(start, end)
+	return p.parseRangeWithPlan(parent, start, end, plan)
+}
+
+func (p *inlineParser) parseRangeWithPlan(parent ast.NodeID, start, end int, plan emphasisPlan) error {
 	for position := start; position < end; {
 		if err := p.state.checkContext(); err != nil {
 			return err
 		}
 		current := p.input.data[position]
+		if pair, matched := plan.openers[position]; matched && pair.closeStart < end {
+			if err := p.emitDelimiterFound(pair.openStart, pair.openLength, pair.kind); err != nil {
+				return err
+			}
+			kind := ast.Emphasis
+			if pair.openLength == 2 {
+				kind = ast.Strong
+			}
+			node := p.state.builder.Add(kind, p.input.span(pair.openStart, pair.closeStart+pair.closeLength))
+			p.state.builder.AppendChild(parent, node)
+			if err := p.parseRangeWithPlan(node, pair.openStart+pair.openLength, pair.closeStart, plan); err != nil {
+				return err
+			}
+			if err := p.emitNode(node, kind); err != nil {
+				return err
+			}
+			position = pair.closeStart + pair.closeLength
+			continue
+		}
 		switch {
 		case current == '\n':
 			p.appendBreak(parent, position, false)
@@ -174,17 +198,19 @@ func (p *inlineParser) parseRange(parent ast.NodeID, start, end int) error {
 				position++
 			}
 		case current == '*' || current == '_':
-			next, matched, err := p.parseDelimiter(parent, position, end, current)
-			if err != nil {
-				return err
+			run := p.literalDelimiterRun(position, end, current, plan)
+			if p.state.parser.profile.Has(profile.PairedPunctuationEmphasis) || p.state.parser.recovery[delimiterKind(current, minInt(run, 2))] != Literal {
+				next, matched, err := p.parseDelimiter(parent, position, end, current)
+				if err != nil {
+					return err
+				}
+				if matched {
+					position = next
+					continue
+				}
 			}
-			if matched {
-				position = next
-			} else {
-				run := byteRun(p.input.data, position, end, current)
-				p.appendSource(parent, position, position+run)
-				position += run
-			}
+			p.appendSource(parent, position, position+run)
+			position += run
 		case current == '~' && p.state.parser.profile.Has(profile.Strikethrough):
 			next, matched, err := p.parseDelimiter(parent, position, end, current)
 			if err != nil {
@@ -209,6 +235,16 @@ func (p *inlineParser) parseRange(parent ast.NodeID, start, end int) error {
 		}
 	}
 	return nil
+}
+
+func (p *inlineParser) literalDelimiterRun(start, end int, marker byte, plan emphasisPlan) int {
+	run := byteRun(p.input.data, start, end, marker)
+	for offset := 1; offset < run; offset++ {
+		if _, planned := plan.openers[start+offset]; planned {
+			return offset
+		}
+	}
+	return run
 }
 
 func (p *inlineParser) appendPlainRun(parent ast.NodeID, start, end int) int {
@@ -503,6 +539,9 @@ func (p *inlineParser) parseLink(parent ast.NodeID, start, end int, image bool) 
 		destination, title, next, parsed = parseInlineLink(p.input.data, next+1, end)
 		if parsed {
 			matched = true
+		} else if reference, ok := p.state.references[normalizeReference(label)]; ok {
+			destination, title, matched = reference.destination, reference.title, true
+			next = labelClose + 1
 		}
 	} else if next < end && p.input.data[next] == '[' {
 		closing := findClosingBracket(p.input.data, next+1, end)
@@ -522,6 +561,9 @@ func (p *inlineParser) parseLink(parent ast.NodeID, start, end int, image bool) 
 	if !matched {
 		return start, false, nil
 	}
+	if !image && p.containsNestedLink(labelStart, labelClose) {
+		return start, false, nil
+	}
 	kind := ast.Link
 	if image {
 		kind = ast.Image
@@ -534,6 +576,62 @@ func (p *inlineParser) parseLink(parent ast.NodeID, start, end int, image bool) 
 		return 0, false, err
 	}
 	return next, true, p.emitNode(node, kind)
+}
+
+func (p *inlineParser) containsNestedLink(start, end int) bool {
+	for position := start; position < end; position++ {
+		switch p.input.data[position] {
+		case '\\':
+			position++
+		case '`':
+			if codeEnd, matched := matchingCodeSpanEnd(p.input.data, position, end); matched {
+				position = codeEnd - 1
+			}
+		case '<':
+			if angleEnd, matched := matchingAngleSpanEnd(p.input.data, position, end); matched {
+				position = angleEnd - 1
+			}
+		case '[':
+			if position > start && p.input.data[position-1] == '!' {
+				continue
+			}
+			if _, matched := p.linkSyntaxEnd(position, end); matched {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (p *inlineParser) linkSyntaxEnd(start, end int) (int, bool) {
+	labelClose := findClosingBracket(p.input.data, start+1, end)
+	if labelClose < 0 {
+		return start, false
+	}
+	label := string(p.input.data[start+1 : labelClose])
+	next := labelClose + 1
+	if next < end && p.input.data[next] == '(' {
+		_, _, parsedEnd, ok := parseInlineLink(p.input.data, next+1, end)
+		if ok {
+			return parsedEnd, true
+		}
+		_, ok = p.state.references[normalizeReference(label)]
+		return next, ok
+	}
+	if next < end && p.input.data[next] == '[' {
+		closing := findClosingBracket(p.input.data, next+1, end)
+		if closing < 0 {
+			return start, false
+		}
+		key := string(p.input.data[next+1 : closing])
+		if key == "" {
+			key = label
+		}
+		_, ok := p.state.references[normalizeReference(key)]
+		return closing + 1, ok
+	}
+	_, ok := p.state.references[normalizeReference(label)]
+	return next, ok
 }
 
 func (p *inlineParser) unclosedStructural(start int, kind ast.Kind, image bool) error {
@@ -587,11 +685,10 @@ func autolinkDestination(inside string) (string, bool) {
 
 func (p *inlineParser) parseEntity(parent ast.NodeID, start, end int) (int, bool) {
 	limit := minInt(end, start+34)
-	semicolon := bytes.IndexByte(p.input.data[start:limit], ';')
-	if semicolon < 2 {
+	semicolon := entityReferenceEnd(p.input.data, start, limit)
+	if semicolon < 0 {
 		return start, false
 	}
-	semicolon += start
 	raw := string(p.input.data[start : semicolon+1])
 	decoded := html.UnescapeString(raw)
 	if decoded == raw {
@@ -599,6 +696,40 @@ func (p *inlineParser) parseEntity(parent ast.NodeID, start, end int) (int, bool
 	}
 	p.appendLiteral(parent, start, semicolon+1, decoded)
 	return semicolon + 1, true
+}
+
+func entityReferenceEnd(data []byte, start, end int) int {
+	position := start + 1
+	if position >= end {
+		return -1
+	}
+	if data[position] == '#' {
+		position++
+		hexadecimal := position < end && (data[position] == 'x' || data[position] == 'X')
+		if hexadecimal {
+			position++
+		}
+		digits := position
+		maximum := 7
+		if hexadecimal {
+			maximum = 6
+		}
+		for position < end && position-digits < maximum && (data[position] >= '0' && data[position] <= '9' || hexadecimal && (data[position] >= 'a' && data[position] <= 'f' || data[position] >= 'A' && data[position] <= 'F')) {
+			position++
+		}
+		if position == digits || position >= end || data[position] != ';' {
+			return -1
+		}
+		return position
+	}
+	nameStart := position
+	for position < end && position-nameStart < 31 && (isASCIIAlpha(data[position]) || data[position] >= '0' && data[position] <= '9') {
+		position++
+	}
+	if position == nameStart || position >= end || data[position] != ';' {
+		return -1
+	}
+	return position
 }
 
 func (p *inlineParser) parseExtendedAutolink(parent ast.NodeID, start, end int) (int, bool) {
@@ -757,6 +888,12 @@ func findClosingBracket(data []byte, start, end int) int {
 				continue
 			}
 		}
+		if data[position] == '<' {
+			if angleEnd, matched := matchingAngleSpanEnd(data, position, end); matched {
+				position = angleEnd - 1
+				continue
+			}
+		}
 		switch data[position] {
 		case '\\':
 			position++
@@ -770,6 +907,16 @@ func findClosingBracket(data []byte, start, end int) int {
 		}
 	}
 	return -1
+}
+
+func matchingAngleSpanEnd(data []byte, start, end int) (int, bool) {
+	if relative := bytes.IndexByte(data[start+1:end], '>'); relative >= 0 {
+		closing := start + 1 + relative
+		if _, ok := autolinkDestination(string(data[start+1 : closing])); ok {
+			return closing + 1, true
+		}
+	}
+	return inlineHTMLEnd(data, start, end)
 }
 
 // matchingCodeSpanEnd returns the byte immediately after an exact-length
