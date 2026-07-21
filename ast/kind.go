@@ -8,7 +8,7 @@ type Kind uint16
 
 const (
 	Invalid Kind = iota
-	Document
+	DocumentKind
 	Paragraph
 	Heading
 	BlockQuote
@@ -39,7 +39,7 @@ const (
 
 var kindNames = [...]string{
 	Invalid:       "invalid",
-	Document:      "document",
+	DocumentKind:  "document",
 	Paragraph:     "paragraph",
 	Heading:       "heading",
 	BlockQuote:    "block_quote",
@@ -77,7 +77,7 @@ func (k Kind) String() string {
 
 // IsBlock reports whether k is a built-in block node.
 func (k Kind) IsBlock() bool {
-	return k >= Document && k <= HTMLBlock || k >= Table && k <= TableRow
+	return k >= DocumentKind && k <= HTMLBlock || k >= Table && k <= TableRow
 }
 
 // IsInline reports whether k is a built-in inline node.

@@ -22,7 +22,7 @@ func NewBuilder(profile string, source []byte, borrow bool) *Builder {
 		payloads: make([]nodePayload, 1, 64),
 	}
 	builder := &Builder{document: document}
-	root := builder.Add(Document, Span{Start: 0, End: len(source)})
+	root := builder.Add(DocumentKind, Span{Start: 0, End: len(source)})
 	if root != 1 {
 		panic("ast: document root did not receive node ID 1")
 	}

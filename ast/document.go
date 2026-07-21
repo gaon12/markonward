@@ -141,7 +141,7 @@ func (d *Document) Walk(root NodeID, fn func(Node, bool) error) error {
 
 // Validate checks arena and tree invariants.
 func (d *Document) Validate() error {
-	if d.Root() == NoNode || d.nodes[d.Root()].kind != Document {
+	if d.Root() == NoNode || d.nodes[d.Root()].kind != DocumentKind {
 		return errors.New("ast: missing document root")
 	}
 	for id := NodeID(1); int(id) < len(d.nodes); id++ {
