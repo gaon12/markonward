@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p benchmarks/results
-          go test -C benchmarks -run '^$' -bench 'Benchmark(Parse|ParseHTML)$' -benchmem -count 10 ./... | tee benchmarks/results/release.txt
+          sh ./scripts/benchmark.sh benchmarks/results/release.txt 10
           go run ./internal/benchgate -input benchmarks/results/release.txt
 
   publish:

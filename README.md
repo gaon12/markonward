@@ -10,8 +10,9 @@ intent recovery for Korean writing without changing CommonMark or GFM modes.
 > **Development status:** this repository is a pre-v1 implementation snapshot,
 > not yet a v1.0 release. The pinned suites pass all 652/652 CommonMark 0.31.2
 > examples and all 671/671 active GFM 0.29 examples, including extension
-> examples. The release workflow also requires the comparative performance
-> gate, which must be revalidated before publishing `v1.0.0`.
+> examples. The paired 10-sample local comparative performance gate passes;
+> remote CI and the release workflow must still succeed before `v1.0.0` is
+> published.
 
 ## Why Markonward?
 

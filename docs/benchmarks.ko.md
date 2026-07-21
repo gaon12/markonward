@@ -25,16 +25,19 @@
 
 ```sh
 mkdir -p benchmarks/results
-go test -C benchmarks -run '^$' -bench 'Benchmark(Parse|ParseHTML)$' \
-  -benchmem -count 10 ./... > benchmarks/results/current.txt
+sh ./scripts/benchmark.sh benchmarks/results/current.txt 10
 
-go tool -modfile=tools/go.mod benchstat benchmarks/results/current.txt
+go tool -C tools benchstat ../benchmarks/results/current.txt
 
 go run ./internal/benchgate -input benchmarks/results/current.txt
 ```
 
 PowerShell redirect는 UTF-16 파일을 만들 수 있습니다. `benchgate`는 UTF-8,
 UTF-16LE, UTF-16BE benchmark 파일을 모두 읽습니다.
+
+Windows에서는 `./scripts/benchmark.ps1`이 같은 결과를 만듭니다. 한 구현을 10회
+연속 측정해 장기 host drift가 편향되지 않도록 각 표본을 독립적인
+`go test -count 1`로 실행하고 두 구현을 인접 측정합니다.
 
 ## v1 릴리스 gate
 
@@ -52,11 +55,10 @@ UTF-16LE, UTF-16BE benchmark 파일을 모두 읽습니다.
 
 ## 현재 스냅샷
 
-2026-07-21의 최종 10회 로컬 실행에서 parser 기하평균 비율은 `ns/op 0.746x`,
-`B/op 0.743x`, `allocs/op 0.304x`, parse+HTML은 각각 `0.714x`, `0.520x`,
-`0.537x`였습니다. 하지만 parser-only `readme`가 개별 상한을 넘는
-`1.589x ns/op`로 측정돼 gate는 실패했습니다. 오래된 2코어 Windows host의
-동일 workload 시간이 20배 넘게 흔들렸으며, 이전에 실패했던 `small`은
-`0.778x ns/op`, 3072 B/op, 13 allocs/op로 개선됐습니다. 제어된 환경에서 10회
-시간을 다시 측정해야 합니다. 이를 안정된 홍보 수치로 사용하지 않으며 어떤 v1
-tag도 gate를 우회할 수 없습니다.
+2026-07-21의 인접 측정 10회 로컬 실행은 release gate를 통과했습니다. parser
+기하평균 비율은 `ns/op 0.811x`, `B/op 0.743x`, `allocs/op 0.304x`,
+parse+HTML은 각각 `0.700x`, `0.520x`, `0.537x`였습니다. 가장 느린 시간 비율은
+parser `korean`의 `1.031x`와 parse+HTML `delimiters`의 `1.058x`로, 모두
+fixture별 `1.15x` 상한 안입니다. 오래된 2코어 Windows host는 여전히 편차가
+크므로 이는 홍보 수치가 아니라 gate 증거입니다. release CI가 같은 인접 측정
+방법을 다시 실행하며 어떤 v1 tag도 이를 우회할 수 없습니다.

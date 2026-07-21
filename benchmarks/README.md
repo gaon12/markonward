@@ -7,7 +7,7 @@ HTML workloads with tracing disabled.
 Run ten samples on an otherwise idle machine:
 
 ```sh
-go test -run '^$' -bench 'Benchmark(Parse|ParseHTML)$' -benchmem -count 10 ./... > current.txt
+sh ../scripts/benchmark.sh results/current.txt 10
 ```
 
 Compare saved runs with `benchstat`. Release evaluation uses geometric means for

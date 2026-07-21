@@ -60,11 +60,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p benchmarks/results
-          go test -C benchmarks -run '^$' -bench 'Benchmark(Parse|ParseHTML)$' -benchmem -count 10 ./... | tee benchmarks/results/current.txt
+          sh ./scripts/benchmark.sh benchmarks/results/current.txt 10
       - name: Format benchstat report
         shell: bash
         run: |
-          go tool -modfile=tools/go.mod benchstat benchmarks/results/current.txt | tee benchmarks/results/benchstat.txt
+          go tool -C tools benchstat ../benchmarks/results/current.txt | tee benchmarks/results/benchstat.txt
       - name: Enforce comparative thresholds
         run: go run ./internal/benchgate -input benchmarks/results/current.txt
       - name: Store benchmark output

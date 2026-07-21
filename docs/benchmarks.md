@@ -25,16 +25,20 @@ required by the gate.
 
 ```sh
 mkdir -p benchmarks/results
-go test -C benchmarks -run '^$' -bench 'Benchmark(Parse|ParseHTML)$' \
-  -benchmem -count 10 ./... > benchmarks/results/current.txt
+sh ./scripts/benchmark.sh benchmarks/results/current.txt 10
 
-go tool -modfile=tools/go.mod benchstat benchmarks/results/current.txt
+go tool -C tools benchstat ../benchmarks/results/current.txt
 
 go run ./internal/benchgate -input benchmarks/results/current.txt
 ```
 
 PowerShell redirection may produce UTF-16; `benchgate` accepts UTF-8, UTF-16LE,
 and UTF-16BE benchmark files.
+
+On Windows, `./scripts/benchmark.ps1` produces the same result. Each sample is
+an independent `go test -count 1` invocation so the two implementations are
+measured next to each other instead of letting long-term host drift bias ten
+consecutive measurements of one implementation.
 
 ## v1 release gate
 
@@ -53,11 +57,10 @@ controlled host.
 
 ## Current snapshot
 
-The final 10-sample local run on 2026-07-21 produced parser geometric-mean
-ratios of `0.746x ns/op`, `0.743x B/op`, and `0.304x allocs/op`; parse+HTML
-produced `0.714x`, `0.520x`, and `0.537x`. The gate still failed because
-parser-only `readme` measured `1.589x ns/op`, above the per-fixture ceiling.
-The old two-core Windows host varied by more than 20x on identical workloads;
-the previously failing `small` fixture moved to `0.778x ns/op`, 3072 B/op, and
-13 allocs/op. A controlled 10-sample timing rerun remains required. Results are
-not marketed as stable numbers, and no v1 tag may bypass the gate.
+The paired 10-sample local run on 2026-07-21 passed the release gate. Parser
+geometric-mean ratios were `0.811x ns/op`, `0.743x B/op`, and `0.304x
+allocs/op`; parse+HTML produced `0.700x`, `0.520x`, and `0.537x`. The slowest
+time ratios were parser `korean` at `1.031x` and parse+HTML `delimiters` at
+`1.058x`, both inside the `1.15x` per-fixture ceiling. The old two-core Windows
+host remains noisy, so these are gate evidence rather than marketing numbers;
+release CI reruns the same paired method and no v1 tag may bypass it.
