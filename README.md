@@ -7,12 +7,11 @@ source-mapped AST and rendering that AST as safe HTML, structured plain text,
 or normalized Markdown. Its fourth profile, EnhanceMark, adds conservative
 intent recovery for Korean writing without changing CommonMark or GFM modes.
 
-> **Development status:** this repository is a pre-v1 implementation snapshot,
-> not yet a v1.0 release. The pinned suites pass all 652/652 CommonMark 0.31.2
-> examples and all 671/671 active GFM 0.29 examples, including extension
-> examples. The paired 10-sample local comparative performance gate passes;
-> remote CI and the release workflow must still succeed before `v1.0.0` is
-> published.
+> **Release status:** v1.0.0 is the first stable Markonward release. Its pinned
+> suites pass all 652/652 CommonMark 0.31.2 examples and all 671/671 active GFM
+> 0.29 examples, including extension examples. The paired 10-sample local
+> comparative performance gate and cross-platform main-branch CI also pass;
+> tagged releases rerun both specification and performance gates.
 
 ## Why Markonward?
 
@@ -36,8 +35,8 @@ go run ./cmd/markonward convert README.md --from enhance --to html
 go run ./cmd/markonward explain README.md --profile enhance --locale ko
 ```
 
-The module path is `github.com/gaon12/markonward`. Until the release gates pass,
-use a commit rather than assuming a stable tagged API.
+The module path is `github.com/gaon12/markonward`. Importers can select the
+stable v1 API with the `v1.0.0` module tag.
 
 ## Library API
 

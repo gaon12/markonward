@@ -7,11 +7,11 @@ HTML·구조화된 일반 텍스트·정규화 Markdown으로 렌더링하는 Go
 네 번째 프로필 EnhanceMark는 CommonMark와 GFM의 동작을 바꾸지 않으면서
 한국어 문장에서 사용자의 의도를 보수적으로 복구합니다.
 
-> **개발 상태:** 현재 저장소는 아직 v1.0 릴리스가 아닌 구현 스냅샷입니다.
-> 고정된 공식 테스트에서 CommonMark 0.31.2
-> 652/652와 활성 확장 예제를 포함한 GFM 0.29 671/671을 모두 통과합니다.
-> 인접 측정한 10개 표본의 로컬 비교 성능 gate도 통과했습니다. `v1.0.0`을
-> 게시하기 전에는 원격 CI와 release workflow가 추가로 성공해야 합니다.
+> **릴리스 상태:** v1.0.0은 Markonward의 첫 안정 릴리스입니다. 고정된 공식
+> 테스트에서 CommonMark 0.31.2 652/652와 활성 확장 예제를 포함한 GFM 0.29
+> 671/671을 모두 통과합니다. 인접 측정한 10개 표본의 로컬 비교 성능 gate와
+> main branch의 교차 플랫폼 CI도 통과하며, tag 릴리스는 명세·성능 gate를 모두
+> 다시 실행합니다.
 
 ## Markonward를 만드는 이유
 
@@ -35,8 +35,8 @@ go run ./cmd/markonward convert README.ko.md --from enhance --to html
 go run ./cmd/markonward explain README.ko.md --profile enhance --locale ko
 ```
 
-모듈 경로는 `github.com/gaon12/markonward`입니다. 릴리스 게이트를 모두
-통과하기 전에는 안정 태그를 가정하지 말고 특정 커밋을 사용하세요.
+모듈 경로는 `github.com/gaon12/markonward`입니다. `v1.0.0` module tag로 안정된
+v1 API를 선택할 수 있습니다.
 
 ## 라이브러리 API
 
