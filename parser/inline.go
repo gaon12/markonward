@@ -229,7 +229,7 @@ func (p *inlineParser) parseRangeWithPlan(parent ast.NodeID, start, end int, pla
 				p.appendSource(parent, position, position+run)
 				position += run
 			}
-		case p.state.parser.profile.Has(profile.ExtendedAutolinks):
+		case p.state.parser.profile.Has(profile.ExtendedAutolinks) && canStartExtendedAutolink(current):
 			next, matched := p.parseExtendedAutolink(parent, position, end)
 			if matched {
 				position = next
@@ -259,7 +259,7 @@ func (p *inlineParser) appendPlainRun(parent ast.NodeID, start, end int) int {
 		if p.hasInlineExtensionTrigger(p.input.data[position]) {
 			break
 		}
-		if p.state.parser.profile.Has(profile.ExtendedAutolinks) && isAutolinkBoundary(p.input.data, position) && hasExtendedAutolinkStart(p.input.data[position:end]) {
+		if p.state.parser.profile.Has(profile.ExtendedAutolinks) && canStartExtendedAutolink(p.input.data[position]) && isAutolinkBoundary(p.input.data, position) && hasExtendedAutolinkStart(p.input.data[position:end]) {
 			break
 		}
 		position++
@@ -298,8 +298,22 @@ func isAutolinkBoundary(data []byte, position int) bool {
 	if position == 0 {
 		return true
 	}
+	// Extended GFM autolinks have ASCII-only prefixes. Most candidate boundaries
+	// are therefore ASCII whitespace or punctuation and do not need Unicode
+	// decoding or property-table lookups.
+	previousByte := data[position-1]
+	if previousByte < utf8.RuneSelf {
+		return previousByte == ' ' || previousByte == '\t' || previousByte == '\n' || previousByte == '\r' || previousByte == '\v' || previousByte == '\f' || isASCIIPunctuation(previousByte)
+	}
 	previous, _ := previousRune(data, position, 0)
 	return unicode.IsSpace(previous) || isUnicodePunctuation(previous)
+}
+
+func canStartExtendedAutolink(current byte) bool {
+	// This is the exact first-byte alphabet accepted by extendedEmailLength.
+	// URL prefixes already begin with an ASCII letter, so the same guard covers
+	// both extended autolink forms without rejecting a valid candidate.
+	return isASCIIAlphanumeric(current) || current == '.' || current == '-' || current == '_' || current == '+'
 }
 
 func hasAutolinkPrefix(data []byte) bool {
