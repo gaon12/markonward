@@ -10,6 +10,7 @@ import (
 	"github.com/gaon12/markonward/profile"
 	markhtml "github.com/gaon12/markonward/renderer/html"
 	markmarkdown "github.com/gaon12/markonward/renderer/markdown"
+	"github.com/gaon12/markonward/renderer/plaintext"
 )
 
 func FuzzParseProfiles(f *testing.F) {
@@ -76,6 +77,73 @@ func FuzzParseRenderRoundTrip(f *testing.F) {
 		}
 		if !bytes.Equal(markdownOutput.Bytes(), normalizedAgain.Bytes()) {
 			t.Fatalf("normalization changed on second pass:\nfirst=%q\nsecond=%q", markdownOutput.Bytes(), normalizedAgain.Bytes())
+		}
+	})
+}
+
+func FuzzBlockSyntax(f *testing.F) {
+	fuzzFocusedParser(f, []string{"# heading\n", "> quote\n", "- item\n  - nested\n", "```go\ncode\n```\n"})
+}
+
+func FuzzDelimiterSyntax(f *testing.F) {
+	fuzzFocusedParser(f, []string{"***nested***", "_a **b** c_", "~~strike~~", "**\"강조\"**"})
+}
+
+func FuzzLinkSyntax(f *testing.F) {
+	fuzzFocusedParser(f, []string{"[text](https://example.com)", "![alt](image.png \"title\")", "[ref]\n\n[ref]: /url"})
+}
+
+func FuzzTableSyntax(f *testing.F) {
+	fuzzFocusedParser(f, []string{"a | b\n---|---\n1|2\n", "| a\\|b | c |\n|:---|---:|\n"})
+}
+
+func FuzzRendererSyntax(f *testing.F) {
+	for _, seed := range []string{"plain", "<script>alert(1)</script>", "[x](javascript:alert(1))", "**unfinished"} {
+		f.Add([]byte(seed))
+	}
+	p, err := parser.New(profile.EnhanceMarkV1)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Fuzz(func(t *testing.T, source []byte) {
+		if !utf8.Valid(source) || len(source) > 1<<20 {
+			t.Skip()
+		}
+		result, parseErr := p.Parse(context.Background(), source)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		var htmlOutput, markdownOutput, textOutput bytes.Buffer
+		if renderErr := markhtml.New().Render(context.Background(), &htmlOutput, result.Document); renderErr != nil {
+			t.Fatal(renderErr)
+		}
+		if renderErr := markmarkdown.New(profile.EnhanceMarkV1).Render(context.Background(), &markdownOutput, result.Document); renderErr != nil {
+			t.Fatal(renderErr)
+		}
+		if renderErr := plaintext.New().Render(context.Background(), &textOutput, result.Document); renderErr != nil {
+			t.Fatal(renderErr)
+		}
+	})
+}
+
+func fuzzFocusedParser(f *testing.F, seeds []string) {
+	for _, seed := range seeds {
+		f.Add([]byte(seed))
+	}
+	p, err := parser.New(profile.EnhanceMarkV1)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Fuzz(func(t *testing.T, source []byte) {
+		if !utf8.Valid(source) || len(source) > 1<<20 {
+			t.Skip()
+		}
+		result, parseErr := p.Parse(context.Background(), source)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		if validationErr := result.Document.Validate(); validationErr != nil {
+			t.Fatal(validationErr)
 		}
 	})
 }
