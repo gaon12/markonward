@@ -204,9 +204,9 @@ func (s Set) Registrations(phase Phase) []Registration {
 	var result []Registration
 	for _, registration := range s.entries {
 		if registration.Phase == phase {
-			copy := registration
-			copy.Triggers = append([]byte(nil), registration.Triggers...)
-			result = append(result, copy)
+			cloned := registration
+			cloned.Triggers = append([]byte(nil), registration.Triggers...)
+			result = append(result, cloned)
 		}
 	}
 	return result
