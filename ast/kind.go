@@ -37,6 +37,16 @@ const (
 	Custom
 )
 
+// Built-in node flag bits. Flags are meaningful only for the documented kind.
+const (
+	ListOrdered uint32 = 1 << iota
+	ListTight
+	TaskChecked
+	TableAlignLeft
+	TableAlignCenter
+	TableAlignRight
+)
+
 var kindNames = [...]string{
 	Invalid:       "invalid",
 	DocumentKind:  "document",
