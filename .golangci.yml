@@ -14,10 +14,15 @@ linters:
     - misspell
     - nilerr
     - nolintlint
-    - perfsprint
     - revive
     - unconvert
     - wastedassign
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
 
 formatters:
   enable:

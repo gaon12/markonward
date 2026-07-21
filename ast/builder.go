@@ -1,6 +1,9 @@
 package ast
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // Builder constructs a Document while preserving arena invariants.
 type Builder struct {
@@ -41,6 +44,10 @@ func (b *Builder) Add(kind Kind, span Span) NodeID {
 	if span.Start < 0 || span.End < span.Start || span.End > len(b.document.source) {
 		panic(fmt.Sprintf("ast: invalid node span [%d,%d)", span.Start, span.End))
 	}
+	if len(b.document.nodes) > math.MaxUint32 {
+		panic("ast: document contains too many nodes")
+	}
+	// #nosec G115 -- the explicit MaxUint32 guard makes the conversion safe.
 	id := NodeID(len(b.document.nodes))
 	b.document.nodes = append(b.document.nodes, nodeRecord{kind: kind, span: span, content: span})
 	b.document.payloads = append(b.document.payloads, nodePayload{})
