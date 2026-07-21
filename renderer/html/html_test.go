@@ -56,3 +56,11 @@ func TestUnsafeGFMStillAppliesTagFilter(t *testing.T) {
 		t.Fatalf("GFM tagfilter missing: %s", got)
 	}
 }
+
+func TestOrderedListStartAttributeIsInsideOpeningTag(t *testing.T) {
+	t.Parallel()
+	got := render(t, profile.CommonMark0312, "2. second\n")
+	if got != "<ol start=\"2\">\n<li>second</li>\n</ol>\n" {
+		t.Fatalf("ordered-list HTML = %q", got)
+	}
+}

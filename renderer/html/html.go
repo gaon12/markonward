@@ -110,11 +110,11 @@ func (s *renderState) node(id ast.NodeID, context renderContext) error { //nolin
 		open, close := "<ul>\n", "</ul>\n"
 		if ordered {
 			start, _ := node.Integers()
-			open = "<ol>"
+			open = "<ol"
 			if start != 1 && start != 0 {
 				open += ` start="` + strconv.Itoa(start) + `"`
 			}
-			open += "\n"
+			open += ">\n"
 			close = "</ol>\n"
 		}
 		return s.container(id, open, close, renderContext{inTightList: listIsTight(s.document, id)})
