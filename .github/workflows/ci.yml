@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Format, vet, and lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.x
+          cache: true
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(find . -name '*.go' -not -path './vendor/*' -print0 | xargs -0 -r gofmt -l)"
+          test -z "$unformatted" || { printf 'gofmt required:\n%s\n' "$unformatted"; exit 1; }
+      - name: Vet main module
+        run: go vet ./...
+      - name: Lint main module
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        with:
+          version: v2.11.4
+          args: --timeout=5m
+      - name: Vet benchmark module
+        run: go vet -C benchmarks ./...
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.x
+          cache: true
+      - name: Test main module
+        run: go test ./...
+      - name: Test benchmark module
+        run: go test -C benchmarks ./...
+
+  race:
+    name: Race detector
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.x
+          cache: true
+      - name: Run race tests
+        run: go test -race ./...
