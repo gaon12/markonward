@@ -58,9 +58,9 @@ controlled host.
 ## Current snapshot
 
 The paired 10-sample local run on 2026-07-21 passed the release gate. Parser
-geometric-mean ratios were `0.811x ns/op`, `0.743x B/op`, and `0.304x
-allocs/op`; parse+HTML produced `0.700x`, `0.520x`, and `0.537x`. The slowest
-time ratios were parser `korean` at `1.031x` and parse+HTML `delimiters` at
-`1.058x`, both inside the `1.15x` per-fixture ceiling. The old two-core Windows
-host remains noisy, so these are gate evidence rather than marketing numbers;
-release CI reruns the same paired method and no v1 tag may bypass it.
+geometric-mean ratios were `0.747x ns/op`, `0.742x B/op`, and `0.302x
+allocs/op`; parse+HTML produced `0.622x`, `0.520x`, and `0.537x`. After indexing
+overflow emphasis pairs, delimiter-heavy ratios were `0.794x` for parser-only
+and `0.618x` for parse+HTML. The old two-core Windows host remains noisy, so
+these are gate evidence rather than marketing numbers; release CI reruns the
+same paired method and no v1 tag may bypass it.

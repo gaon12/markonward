@@ -56,9 +56,9 @@ Windows에서는 `./scripts/benchmark.ps1`이 같은 결과를 만듭니다. 한
 ## 현재 스냅샷
 
 2026-07-21의 인접 측정 10회 로컬 실행은 release gate를 통과했습니다. parser
-기하평균 비율은 `ns/op 0.811x`, `B/op 0.743x`, `allocs/op 0.304x`,
-parse+HTML은 각각 `0.700x`, `0.520x`, `0.537x`였습니다. 가장 느린 시간 비율은
-parser `korean`의 `1.031x`와 parse+HTML `delimiters`의 `1.058x`로, 모두
-fixture별 `1.15x` 상한 안입니다. 오래된 2코어 Windows host는 여전히 편차가
-크므로 이는 홍보 수치가 아니라 gate 증거입니다. release CI가 같은 인접 측정
-방법을 다시 실행하며 어떤 v1 tag도 이를 우회할 수 없습니다.
+기하평균 비율은 `ns/op 0.747x`, `B/op 0.742x`, `allocs/op 0.302x`,
+parse+HTML은 각각 `0.622x`, `0.520x`, `0.537x`였습니다. overflow emphasis
+pair를 인덱싱한 뒤 delimiter 중심 비율은 parser-only `0.794x`, parse+HTML
+`0.618x`였습니다. 오래된 2코어 Windows host는 여전히 편차가 크므로 이는
+홍보 수치가 아니라 gate 증거입니다. release CI가 같은 인접 측정 방법을 다시
+실행하며 어떤 v1 tag도 이를 우회할 수 없습니다.

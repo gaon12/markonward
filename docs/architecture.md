@@ -81,6 +81,6 @@ node kind it handles; the handler owns child traversal through `RenderChildren`.
 
 The normal block scan and tree walk are linear in input/nodes. Inline emphasis
 uses a delimiter-run plan with fixed inline storage for ordinary paragraphs and
-overflow storage for adversarial input. Fuzzing guards against panic,
-non-termination, and invalid spans; the pinned CommonMark and GFM suites enforce
-the complete built-in syntax contracts.
+sorted overflow storage with binary lookup for delimiter-heavy input. Fuzzing
+guards against panic, non-termination, and invalid spans; the pinned CommonMark
+and GFM suites enforce the complete built-in syntax contracts.

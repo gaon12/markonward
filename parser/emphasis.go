@@ -1,6 +1,9 @@
 package parser
 
-import "bytes"
+import (
+	"bytes"
+	"slices"
+)
 
 type emphasisDelimiter struct {
 	start     int
@@ -96,6 +99,7 @@ func (p *inlineParser) planEmphasis(start, end int) emphasisPlan {
 			}
 		}
 	}
+	plan.prepareLookup()
 	return plan
 }
 
@@ -105,19 +109,44 @@ func (p *emphasisPlan) add(pair emphasisPair) {
 		p.count++
 		return
 	}
+	if p.overflow == nil {
+		p.overflow = make([]emphasisPair, p.count, len(p.inline)*2)
+		copy(p.overflow, p.inline[:p.count])
+		p.count = 0
+	}
 	p.overflow = append(p.overflow, pair)
 }
 
+func (p *emphasisPlan) prepareLookup() {
+	if p.overflow == nil {
+		return
+	}
+	slices.SortFunc(p.overflow, func(left, right emphasisPair) int {
+		return left.openStart - right.openStart
+	})
+}
+
 func (p *emphasisPlan) openerAt(position int) (emphasisPair, bool) {
-	for index := 0; index < p.count; index++ {
-		if p.inline[index].openStart == position {
-			return p.inline[index], true
+	if p.overflow == nil {
+		for index := 0; index < p.count; index++ {
+			if p.inline[index].openStart == position {
+				return p.inline[index], true
+			}
+		}
+		return emphasisPair{}, false
+	}
+	low, high := 0, len(p.overflow)
+	for low < high {
+		middle := int(uint(low+high) >> 1)
+		pair := p.overflow[middle]
+		if pair.openStart < position {
+			low = middle + 1
+		} else {
+			high = middle
 		}
 	}
-	for _, pair := range p.overflow {
-		if pair.openStart == position {
-			return pair, true
-		}
+	if low < len(p.overflow) && p.overflow[low].openStart == position {
+		return p.overflow[low], true
 	}
 	return emphasisPair{}, false
 }
