@@ -1,0 +1,15 @@
+# Go build and test output
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+
+# Benchmark output
+/benchmarks/results/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
