@@ -237,7 +237,7 @@ func (s *parseState) parseParagraph(lines []sourceLine, start int, parent ast.No
 				if _, _, ok := setextUnderline(content); ok {
 					break
 				}
-				if s.parser.profile.Has(profile.Tables) && isTableDelimiter(content) {
+				if s.parser.profile.Has(profile.Tables) && index == start+1 && isTableStart(s.lineBytes(lines[start]), content) {
 					break
 				}
 				if startsBlock(content) {
@@ -261,7 +261,7 @@ func (s *parseState) parseParagraph(lines []sourceLine, start int, parent ast.No
 			s.inlines = append(s.inlines, inlineBlock{node: node, spans: spans})
 			return index + 1, nil
 		}
-		if s.parser.profile.Has(profile.Tables) && isTableDelimiter(s.lineBytes(lines[index])) {
+		if s.parser.profile.Has(profile.Tables) && len(spans) == 1 && isTableStart(s.lineBytes(lines[start]), s.lineBytes(lines[index])) {
 			return s.parseTable(lines, start, index, parent)
 		}
 	}
@@ -474,10 +474,16 @@ func (s *parseState) parseTable(lines []sourceLine, headerIndex, delimiterIndex 
 		s.builder.AppendChild(row, cell)
 		s.inlines = append(s.inlines, inlineBlock{node: cell, spans: []ast.Span{span}})
 	}
-	body := s.builder.Add(ast.TableBody, ast.Span{Start: lines[delimiterIndex].newlineEnd, End: lines[delimiterIndex].newlineEnd})
-	s.builder.AppendChild(table, body)
 	index := delimiterIndex + 1
-	for index < len(lines) && !isBlank(s.lineBytes(lines[index])) && bytes.Contains(s.lineBytes(lines[index]), []byte{'|'}) {
+	body := ast.NoNode
+	for index < len(lines) && !isBlank(s.lineBytes(lines[index])) {
+		if startsBlock(s.lineBytes(lines[index])) {
+			break
+		}
+		if body == ast.NoNode {
+			body = s.builder.Add(ast.TableBody, ast.Span{Start: lines[index].start, End: lines[index].newlineEnd})
+			s.builder.AppendChild(table, body)
+		}
 		cells := splitTableCells(s.lineBytes(lines[index]), lines[index].contentStart)
 		bodyRow := s.builder.Add(ast.TableRow, ast.Span{Start: lines[index].contentStart, End: lines[index].contentEnd})
 		s.builder.AppendChild(body, bodyRow)
@@ -879,11 +885,18 @@ func isTableDelimiter(line []byte) bool {
 		cell := bytes.TrimSpace(line[span.Start:span.End])
 		cell = bytes.TrimPrefix(cell, []byte{':'})
 		cell = bytes.TrimSuffix(cell, []byte{':'})
-		if len(cell) < 3 || !allByte(cell, '-') {
+		if len(cell) < 1 || !allByte(cell, '-') {
 			return false
 		}
 	}
 	return true
+}
+
+func isTableStart(header, delimiter []byte) bool {
+	if !isTableDelimiter(delimiter) || !bytes.Contains(header, []byte{'|'}) && !bytes.Contains(delimiter, []byte{'|'}) {
+		return false
+	}
+	return len(splitTableCells(header, 0)) == len(splitTableCells(delimiter, 0))
 }
 
 func splitTableCells(line []byte, base int) []ast.Span {

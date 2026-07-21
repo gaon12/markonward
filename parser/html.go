@@ -108,21 +108,31 @@ func htmlBlockEnded(line []byte, rule htmlBlockRule) bool {
 // processing instruction, declaration, or CDATA section and returns its
 // half-open end offset.
 func inlineHTMLEnd(data []byte, start, end int) (int, bool) {
+	return inlineHTMLEndVersion(data, start, end, false)
+}
+
+func inlineHTMLEndVersion(data []byte, start, end int, strictComments bool) (int, bool) {
 	if start < 0 || start >= end || data[start] != '<' {
 		return start, false
 	}
 	remaining := data[start:end]
 	switch {
 	case bytes.HasPrefix(remaining, []byte("<!--")):
-		if len(remaining) >= 5 && remaining[4] == '>' {
+		if !strictComments && len(remaining) >= 5 && remaining[4] == '>' {
 			return start + 5, true
 		}
-		if len(remaining) >= 6 && remaining[4] == '-' && remaining[5] == '>' {
+		if !strictComments && len(remaining) >= 6 && remaining[4] == '-' && remaining[5] == '>' {
 			return start + 6, true
 		}
 		closing := bytes.Index(remaining[4:], []byte("-->"))
 		if closing < 0 {
 			return start, false
+		}
+		if strictComments {
+			text := remaining[4 : 4+closing]
+			if bytes.HasPrefix(text, []byte(">")) || bytes.HasPrefix(text, []byte("->")) || bytes.HasSuffix(text, []byte("-")) || bytes.Contains(text, []byte("--")) {
+				return start, false
+			}
 		}
 		return start + 4 + closing + 3, true
 	case bytes.HasPrefix(remaining, []byte("<?")):

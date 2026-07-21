@@ -27,6 +27,7 @@ type specificationExample struct {
 	HTML      string `json:"html"`
 	Example   int    `json:"example"`
 	Section   string `json:"section"`
+	Extension string `json:"extension,omitempty"`
 	StartLine int    `json:"start_line"`
 	EndLine   int    `json:"end_line"`
 }
@@ -49,10 +50,10 @@ func TestOfficialGFM029Examples(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract GFM fixture: %v", err)
 	}
-	if len(examples) != 649 {
-		t.Fatalf("GFM fixture contains %d examples, want 649", len(examples))
+	if len(examples) != 671 {
+		t.Fatalf("GFM fixture contains %d examples, want 671", len(examples))
 	}
-	checkExamples(t, profile.GFM029, examples)
+	checkExamplesWithProfile(t, profile.GFM029, examples, gfmSpecificationProfile)
 }
 
 func readFixture(t *testing.T, name, expectedHash string) []byte {
@@ -79,9 +80,10 @@ func extractGFMExamples(specification string) ([]specificationExample, error) {
 		if strings.HasPrefix(line, "## ") {
 			section = strings.TrimSpace(strings.TrimPrefix(line, "## "))
 		}
-		if line != fence+" example" {
+		if !strings.HasPrefix(line, fence+" example") {
 			continue
 		}
+		extension := strings.TrimSpace(strings.TrimPrefix(line, fence+" example"))
 		startLine := index + 2
 		var markdown strings.Builder
 		index++
@@ -101,27 +103,41 @@ func extractGFMExamples(specification string) ([]specificationExample, error) {
 		if index >= len(lines) {
 			return nil, fmt.Errorf("example %d has no closing fence", len(examples)+1)
 		}
+		if extension == "disabled" {
+			continue
+		}
 		examples = append(examples, specificationExample{
 			Markdown: markdown.String(), HTML: expected.String(), Example: len(examples) + 1,
-			Section: section, StartLine: startLine, EndLine: index + 1,
+			Section: section, Extension: extension, StartLine: startLine, EndLine: index + 1,
 		})
 	}
 	return examples, nil
 }
 
 func checkExamples(t *testing.T, selected profile.Profile, examples []specificationExample) {
+	checkExamplesWithProfile(t, selected, examples, func(specificationExample) profile.Profile { return selected })
+}
+
+func checkExamplesWithProfile(t *testing.T, selected profile.Profile, examples []specificationExample, selectProfile func(specificationExample) profile.Profile) {
 	t.Helper()
-	p, err := parser.New(selected)
-	if err != nil {
-		t.Fatal(err)
-	}
 	renderer := markhtml.New(markhtml.WithUnsafe(), markhtml.WithXHTML())
+	parsers := make(map[string]*parser.Parser)
 	mismatches := 0
 	loggedMismatches := 0
 	sectionFilter := os.Getenv("MARKONWARD_SPEC_SECTION")
 	type sectionResult struct{ passed, total int }
 	sections := make(map[string]sectionResult)
 	for _, example := range examples {
+		exampleProfile := selectProfile(example)
+		p := parsers[exampleProfile.ID()]
+		if p == nil {
+			var err error
+			p, err = parser.New(exampleProfile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsers[exampleProfile.ID()] = p
+		}
 		section := sections[example.Section]
 		section.total++
 		result, parseErr := p.Parse(context.Background(), []byte(example.Markdown))
@@ -156,4 +172,28 @@ func checkExamples(t *testing.T, selected profile.Profile, examples []specificat
 	if os.Getenv("MARKONWARD_STRICT_SPECS") == "1" && mismatches != 0 {
 		t.Fatalf("%s conformance gate failed: %d examples mismatched", selected, mismatches)
 	}
+}
+
+func gfmSpecificationProfile(example specificationExample) profile.Profile {
+	feature := profile.Feature(0)
+	id := "spec-gfm-0.29-base"
+	switch example.Extension {
+	case "":
+	case "table":
+		feature = profile.Tables
+	case "strikethrough":
+		feature = profile.Strikethrough
+	case "autolink":
+		feature = profile.ExtendedAutolinks
+	case "tagfilter":
+		feature = profile.TagFilter
+		id = "gfm-0.29-spec-tagfilter"
+	default:
+		panic("unrecognized GFM specification extension " + example.Extension)
+	}
+	selected, err := profile.New(id+"-"+example.Extension, "GFM 0.29 specification example", "0.29", feature)
+	if err != nil {
+		panic(err)
+	}
+	return selected
 }

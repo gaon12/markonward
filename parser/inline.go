@@ -250,7 +250,7 @@ func (p *inlineParser) literalDelimiterRun(start, end int, marker byte, plan emp
 func (p *inlineParser) appendPlainRun(parent ast.NodeID, start, end int) int {
 	position := start + 1
 	for position < end && !isInlineSpecial(p.input.data[position], p.state.parser.profile) {
-		if p.state.parser.profile.Has(profile.ExtendedAutolinks) && isAutolinkBoundary(p.input.data, position) && hasAutolinkPrefix(p.input.data[position:end]) {
+		if p.state.parser.profile.Has(profile.ExtendedAutolinks) && isAutolinkBoundary(p.input.data, position) && hasExtendedAutolinkStart(p.input.data[position:end]) {
 			break
 		}
 		position++
@@ -285,7 +285,22 @@ func isAutolinkBoundary(data []byte, position int) bool {
 }
 
 func hasAutolinkPrefix(data []byte) bool {
-	return bytes.HasPrefix(data, []byte("http://")) || bytes.HasPrefix(data, []byte("https://")) || bytes.HasPrefix(data, []byte("www."))
+	return bytes.HasPrefix(data, []byte("http://")) || bytes.HasPrefix(data, []byte("https://")) || bytes.HasPrefix(data, []byte("ftp://")) || bytes.HasPrefix(data, []byte("www."))
+}
+
+func hasExtendedAutolinkStart(data []byte) bool {
+	if hasAutolinkPrefix(data) {
+		return true
+	}
+	for _, current := range data {
+		if current == '@' {
+			return true
+		}
+		if current <= ' ' || current == '<' {
+			return false
+		}
+	}
+	return false
 }
 
 func isInlineSpecial(current byte, selected profile.Profile) bool {
@@ -307,6 +322,9 @@ func (p *inlineParser) parseCodeSpan(parent ast.NodeID, start, end int) (int, bo
 			continue
 		}
 		literal := strings.ReplaceAll(string(p.input.data[start+run:candidate]), "\n", " ")
+		if p.insideTableCell(parent) {
+			literal = strings.ReplaceAll(literal, `\|`, `|`)
+		}
 		if len(literal) >= 2 && literal[0] == ' ' && literal[len(literal)-1] == ' ' && strings.Trim(literal, " ") != "" {
 			literal = literal[1 : len(literal)-1]
 		}
@@ -316,6 +334,17 @@ func (p *inlineParser) parseCodeSpan(parent ast.NodeID, start, end int) (int, bo
 		return candidate + run, true, p.emitNode(node, ast.CodeSpan)
 	}
 	return p.recoverUnclosed(parent, start, end, run, ast.CodeSpan)
+}
+
+func (p *inlineParser) insideTableCell(parent ast.NodeID) bool {
+	for parent != ast.NoNode {
+		node := p.state.builder.Document().Node(parent)
+		if node.Kind() == ast.TableCell {
+			return true
+		}
+		parent = node.Parent()
+	}
+	return false
 }
 
 func (p *inlineParser) parseDelimiter(parent ast.NodeID, start, end int, marker byte) (int, bool, error) {
@@ -659,7 +688,8 @@ func (p *inlineParser) parseAngle(parent ast.NodeID, start, end int) (int, bool)
 			return closing + 1, true
 		}
 	}
-	if htmlEnd, ok := inlineHTMLEnd(p.input.data, start, end); ok {
+	strictComments := p.state.parser.profile.CommonMarkBase() == "0.29"
+	if htmlEnd, ok := inlineHTMLEndVersion(p.input.data, start, end, strictComments); ok {
 		node := p.state.builder.Add(ast.RawHTML, p.input.span(start, htmlEnd))
 		p.state.builder.SetContentSpan(node, p.input.span(start, htmlEnd))
 		p.state.builder.AppendChild(parent, node)
@@ -746,10 +776,21 @@ func (p *inlineParser) parseExtendedAutolink(parent ast.NodeID, start, end int) 
 		prefix = []byte("https://")
 	case bytes.HasPrefix(remaining, []byte("http://")):
 		prefix = []byte("http://")
+	case bytes.HasPrefix(remaining, []byte("ftp://")):
+		prefix = []byte("ftp://")
 	case bytes.HasPrefix(remaining, []byte("www.")):
 		prefix = []byte("www.")
 	default:
-		return start, false
+		length := extendedEmailLength(remaining)
+		if length == 0 {
+			return start, false
+		}
+		visible := string(remaining[:length])
+		node := p.state.builder.Add(ast.Autolink, p.input.span(start, start+length))
+		p.state.builder.SetDestination(node, "mailto:"+visible)
+		p.state.builder.AppendChild(parent, node)
+		p.appendSource(node, start, start+length)
+		return start + length, true
 	}
 	length := len(prefix)
 	for length < len(remaining) {
@@ -759,8 +800,20 @@ func (p *inlineParser) parseExtendedAutolink(parent ast.NodeID, start, end int) 
 		}
 		length++
 	}
+	if length > len(prefix) && remaining[length-1] == ';' {
+		ampersand := bytes.LastIndexByte(remaining[:length], '&')
+		if ampersand >= len(prefix) && allASCIIAlphanumeric(remaining[ampersand+1:length-1]) {
+			length = ampersand
+		}
+	}
 	for length > len(prefix) && strings.ContainsRune(".,:;!?", rune(remaining[length-1])) {
 		length--
+	}
+	openParentheses := bytes.Count(remaining[:length], []byte{'('})
+	closeParentheses := bytes.Count(remaining[:length], []byte{')'})
+	for length > len(prefix) && closeParentheses > openParentheses && remaining[length-1] == ')' {
+		length--
+		closeParentheses--
 	}
 	if length == len(prefix) {
 		return start, false
@@ -775,6 +828,49 @@ func (p *inlineParser) parseExtendedAutolink(parent ast.NodeID, start, end int) 
 	p.state.builder.AppendChild(parent, node)
 	p.appendSource(node, start, start+length)
 	return start + length, true
+}
+
+func extendedEmailLength(data []byte) int {
+	position := 0
+	for position < len(data) && (isASCIIAlphanumeric(data[position]) || strings.ContainsRune(".-_+", rune(data[position]))) {
+		position++
+	}
+	if position == 0 || position >= len(data) || data[position] != '@' {
+		return 0
+	}
+	position++
+	domainStart := position
+	hasPeriod := false
+	for position < len(data) && (isASCIIAlphanumeric(data[position]) || strings.ContainsRune(".-_", rune(data[position]))) {
+		hasPeriod = hasPeriod || data[position] == '.'
+		position++
+	}
+	if position == domainStart || !hasPeriod || position < len(data) && data[position] == '+' {
+		return 0
+	}
+	if data[position-1] == '.' {
+		position--
+	}
+	if position == domainStart || data[position-1] == '-' || data[position-1] == '_' {
+		return 0
+	}
+	return position
+}
+
+func allASCIIAlphanumeric(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	for _, current := range data {
+		if !isASCIIAlphanumeric(current) {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIIAlphanumeric(current byte) bool {
+	return isASCIIAlpha(current) || current >= '0' && current <= '9'
 }
 
 func (p *inlineParser) appendSource(parent ast.NodeID, start, end int) {
