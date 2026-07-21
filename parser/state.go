@@ -41,7 +41,7 @@ func (s *parseState) checkContext() error {
 }
 
 func (s *parseState) emit(level trace.Level, event trace.Event) error {
-	if s.parser.traceSink == nil || level > s.parser.traceLevel {
+	if !s.tracing(level) {
 		return nil
 	}
 	s.sequence++
@@ -52,6 +52,10 @@ func (s *parseState) emit(level trace.Level, event trace.Event) error {
 		return fmt.Errorf("parser: trace sink: %w", err)
 	}
 	return nil
+}
+
+func (s *parseState) tracing(level trace.Level) bool {
+	return s.parser.traceSink != nil && level <= s.parser.traceLevel
 }
 
 func (s *parseState) addDiagnostic(current diagnostic.Diagnostic) {

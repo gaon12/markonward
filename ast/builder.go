@@ -14,6 +14,9 @@ type Builder struct {
 // NewBuilder creates a builder. If borrow is true, the finished document
 // references source directly; otherwise source is copied immediately.
 func NewBuilder(profile string, source []byte, borrow bool) *Builder {
+	if uint64(len(source)) > math.MaxUint32 {
+		panic("ast: source exceeds uint32 arena offsets")
+	}
 	if !borrow {
 		source = append([]byte(nil), source...)
 	}
@@ -21,8 +24,10 @@ func NewBuilder(profile string, source []byte, borrow bool) *Builder {
 		profile:  profile,
 		source:   source,
 		borrowed: borrow,
-		nodes:    make([]nodeRecord, 1, 64),
-		payloads: make([]nodePayload, 1, 64),
+		// Forty-eight nodes cover typical short documents without making every
+		// parser-only call pay for the former 64-node backing array. The chosen
+		// capacity also preserves efficient slice growth for larger documents.
+		nodes: make([]nodeRecord, 1, 48),
 	}
 	builder := &Builder{document: document}
 	root := builder.Add(DocumentKind, Span{Start: 0, End: len(source)})
@@ -49,8 +54,8 @@ func (b *Builder) Add(kind Kind, span Span) NodeID {
 	}
 	// #nosec G115 -- the explicit MaxUint32 guard makes the conversion safe.
 	id := NodeID(len(b.document.nodes))
-	b.document.nodes = append(b.document.nodes, nodeRecord{kind: kind, span: span, content: span})
-	b.document.payloads = append(b.document.payloads, nodePayload{})
+	packed := packSpan(span)
+	b.document.nodes = append(b.document.nodes, nodeRecord{kind: kind, span: packed, content: packed})
 	return id
 }
 
@@ -103,32 +108,46 @@ func (b *Builder) SetContentSpan(id NodeID, span Span) {
 	if span.Start < 0 || span.End < span.Start || span.End > len(b.document.source) {
 		panic("ast: invalid content span")
 	}
-	b.document.nodes[id].content = span
+	b.document.nodes[id].content = packSpan(span)
 }
 
 func (b *Builder) SetText(id NodeID, text string) {
 	b.assertMutable()
 	b.require(id)
-	b.document.payloads[id].text = text
+	payload := b.payload(id)
+	payload.text = text
+	payload.hasText = true
+	b.document.payloads[id] = payload
 }
 
 func (b *Builder) SetDestination(id NodeID, destination string) {
 	b.assertMutable()
 	b.require(id)
-	b.document.payloads[id].destination = destination
+	payload := b.payload(id)
+	payload.destination = destination
+	b.document.payloads[id] = payload
 }
 
 func (b *Builder) SetTitle(id NodeID, title string) {
 	b.assertMutable()
 	b.require(id)
-	b.document.payloads[id].title = title
+	payload := b.payload(id)
+	payload.title = title
+	b.document.payloads[id] = payload
 }
 
 func (b *Builder) SetIntegers(id NodeID, first, second int) {
 	b.assertMutable()
 	b.require(id)
-	b.document.payloads[id].integer1 = first
-	b.document.payloads[id].integer2 = second
+	const (
+		minimum = -1 << 31
+		maximum = 1<<31 - 1
+	)
+	if first < minimum || first > maximum || second < minimum || second > maximum {
+		panic("ast: integer metadata exceeds int32 storage")
+	}
+	b.document.nodes[id].integer1 = int32(first)  // #nosec G115 -- parser metadata is range-validated before assignment.
+	b.document.nodes[id].integer2 = int32(second) // #nosec G115 -- parser metadata is range-validated before assignment.
 }
 
 func (b *Builder) SetFlags(id NodeID, flags uint32) {
@@ -143,8 +162,10 @@ func (b *Builder) SetCustom(id NodeID, kind string, payload any) {
 	if b.document.nodes[id].kind != Custom {
 		panic("ast: custom payload requires a custom node")
 	}
-	b.document.payloads[id].customKind = kind
-	b.document.payloads[id].custom = payload
+	stored := b.payload(id)
+	stored.customKind = kind
+	stored.custom = payload
+	b.document.payloads[id] = stored
 }
 
 // Build validates and freezes the document.
@@ -167,4 +188,11 @@ func (b *Builder) require(id NodeID) {
 	if !b.document.valid(id) {
 		panic(fmt.Sprintf("ast: invalid node ID %d", id))
 	}
+}
+
+func (b *Builder) payload(id NodeID) nodePayload {
+	if b.document.payloads == nil {
+		b.document.payloads = make(map[NodeID]nodePayload)
+	}
+	return b.document.payloads[id]
 }

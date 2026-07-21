@@ -20,13 +20,17 @@ type inlineInput struct {
 	data     []byte
 	offsets  []int
 	terminal int
-	document []byte
 }
 
 func newInlineInput(source []byte, spans []ast.Span) inlineInput {
 	if len(spans) == 1 {
 		span := spans[0]
-		return inlineInput{data: source[span.Start:span.End], terminal: span.End, document: source}
+		return inlineInput{data: source[span.Start:span.End], terminal: span.End}
+	}
+	if spansAreLFContiguous(source, spans) {
+		start := spans[0].Start
+		end := spans[len(spans)-1].End
+		return inlineInput{data: source[start:end], terminal: end}
 	}
 	total := 0
 	for _, span := range spans {
@@ -49,7 +53,20 @@ func newInlineInput(source []byte, spans []ast.Span) inlineInput {
 	if len(spans) > 0 {
 		terminal = spans[len(spans)-1].End
 	}
-	return inlineInput{data: data, offsets: offsets, terminal: terminal, document: source}
+	return inlineInput{data: data, offsets: offsets, terminal: terminal}
+}
+
+func spansAreLFContiguous(source []byte, spans []ast.Span) bool {
+	if len(spans) < 2 {
+		return false
+	}
+	for index := 1; index < len(spans); index++ {
+		previous := spans[index-1]
+		if previous.End >= len(source) || source[previous.End] != '\n' || spans[index].Start != previous.End+1 {
+			return false
+		}
+	}
+	return true
 }
 
 func (i inlineInput) offset(index int) int {
@@ -582,15 +599,15 @@ func (p *inlineParser) parseExtendedAutolink(parent ast.NodeID, start, end int) 
 			return start, false
 		}
 	}
-	remaining := string(p.input.data[start:end])
-	var prefix string
+	remaining := p.input.data[start:end]
+	var prefix []byte
 	switch {
-	case strings.HasPrefix(remaining, "https://"):
-		prefix = "https://"
-	case strings.HasPrefix(remaining, "http://"):
-		prefix = "http://"
-	case strings.HasPrefix(remaining, "www."):
-		prefix = "www."
+	case bytes.HasPrefix(remaining, []byte("https://")):
+		prefix = []byte("https://")
+	case bytes.HasPrefix(remaining, []byte("http://")):
+		prefix = []byte("http://")
+	case bytes.HasPrefix(remaining, []byte("www.")):
+		prefix = []byte("www.")
 	default:
 		return start, false
 	}
@@ -608,9 +625,9 @@ func (p *inlineParser) parseExtendedAutolink(parent ast.NodeID, start, end int) 
 	if length == len(prefix) {
 		return start, false
 	}
-	visible := remaining[:length]
+	visible := string(remaining[:length])
 	destination := visible
-	if prefix == "www." {
+	if bytes.Equal(prefix, []byte("www.")) {
 		destination = "http://" + visible
 	}
 	node := p.state.builder.Add(ast.Autolink, p.input.span(start, start+length))
@@ -658,6 +675,9 @@ func (p *inlineParser) appendBreak(parent ast.NodeID, position int, hard bool) {
 }
 
 func (p *inlineParser) emitDelimiterFound(start, run int, marker byte) error {
+	if !p.state.tracing(trace.Verbose) {
+		return nil
+	}
 	return p.state.emit(trace.Verbose, trace.Event{
 		Phase: trace.Inline, RuleID: "inline.delimiter.found", Decision: trace.Observed, Span: p.input.span(start, start+run),
 		Left: previousRuneString(p.input.data, start), Right: nextRuneString(p.input.data, start+run, len(p.input.data)),

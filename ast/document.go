@@ -15,11 +15,23 @@ const NoNode NodeID = 0
 
 type nodeRecord struct {
 	kind                                Kind
-	span                                Span
-	content                             Span
+	span                                sourceSpan
+	content                             sourceSpan
 	parent, first, last, previous, next NodeID
 	flags                               uint32
+	integer1, integer2                  int32
 }
+
+type sourceSpan struct {
+	start uint32
+	end   uint32
+}
+
+func packSpan(span Span) sourceSpan {
+	return sourceSpan{start: uint32(span.Start), end: uint32(span.End)} // #nosec G115 -- Builder caps sources at MaxUint32.
+}
+
+func (s sourceSpan) public() Span { return Span{Start: int(s.start), End: int(s.end)} }
 
 type nodePayload struct {
 	text        string
@@ -27,8 +39,7 @@ type nodePayload struct {
 	title       string
 	customKind  string
 	custom      any
-	integer1    int
-	integer2    int
+	hasText     bool
 }
 
 // Document owns an arena of Markdown nodes and a reference to their source.
@@ -39,7 +50,7 @@ type Document struct {
 	source   []byte
 	borrowed bool
 	nodes    []nodeRecord
-	payloads []nodePayload
+	payloads map[NodeID]nodePayload
 
 	lineOnce   sync.Once
 	lineStarts []int
@@ -146,8 +157,9 @@ func (d *Document) Validate() error {
 	}
 	for id := NodeID(1); int(id) < len(d.nodes); id++ {
 		record := d.nodes[id]
-		if record.span.Start < 0 || record.span.End < record.span.Start || record.span.End > len(d.source) {
-			return fmt.Errorf("ast: node %d has invalid span [%d,%d)", id, record.span.Start, record.span.End)
+		span := record.span.public()
+		if span.End < span.Start || span.End > len(d.source) {
+			return fmt.Errorf("ast: node %d has invalid span [%d,%d)", id, span.Start, span.End)
 		}
 		if record.parent != NoNode && !d.valid(record.parent) {
 			return fmt.Errorf("ast: node %d has invalid parent %d", id, record.parent)
@@ -177,13 +189,13 @@ func (n Node) Span() Span {
 	if !n.Valid() {
 		return Span{}
 	}
-	return n.document.nodes[n.id].span
+	return n.document.nodes[n.id].span.public()
 }
 func (n Node) ContentSpan() Span {
 	if !n.Valid() {
 		return Span{}
 	}
-	return n.document.nodes[n.id].content
+	return n.document.nodes[n.id].content.public()
 }
 func (n Node) Parent() NodeID {
 	if !n.Valid() {
@@ -226,10 +238,10 @@ func (n Node) Text() string {
 		return ""
 	}
 	payload := n.document.payloads[n.id]
-	if payload.text != "" {
+	if payload.hasText {
 		return payload.text
 	}
-	span := n.document.nodes[n.id].content
+	span := n.document.nodes[n.id].content.public()
 	if span.End <= len(n.document.source) && span.Start <= span.End {
 		return string(n.document.source[span.Start:span.End])
 	}
@@ -251,8 +263,8 @@ func (n Node) Integers() (int, int) {
 	if !n.Valid() {
 		return 0, 0
 	}
-	payload := n.document.payloads[n.id]
-	return payload.integer1, payload.integer2
+	record := n.document.nodes[n.id]
+	return int(record.integer1), int(record.integer2)
 }
 func (n Node) CustomKind() string {
 	if !n.Valid() {
