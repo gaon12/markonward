@@ -23,7 +23,10 @@ jobs:
           cache: true
       - name: Require an annotated tag
         shell: bash
-        run: test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
+        run: |
+          verification_ref="refs/verify-tags/$GITHUB_REF_NAME"
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:$verification_ref"
+          test "$(git cat-file -t "$verification_ref")" = tag
       - name: Run all ordinary checks
         run: sh ./scripts/check.sh
       - name: Require complete official conformance
