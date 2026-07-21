@@ -25,7 +25,7 @@ func TestConvertDefaultsToEnhanceHTML(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
-	if stdout != "<p>문장<strong>&#34;강조&#34;</strong></p>\n" {
+	if stdout != "<p>문장<strong>&quot;강조&quot;</strong></p>\n" {
 		t.Fatalf("stdout=%q", stdout)
 	}
 }

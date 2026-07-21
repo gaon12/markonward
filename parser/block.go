@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/gaon12/markonward/ast"
 	"github.com/gaon12/markonward/profile"
@@ -13,6 +12,7 @@ import (
 type sourceLine struct {
 	start, end, newlineEnd   int
 	contentStart, contentEnd int
+	lazy                     bool
 }
 
 func scanLines(source []byte) []sourceLine {
@@ -76,10 +76,21 @@ func (s *parseState) parseBlocks(lines []sourceLine, parent ast.NodeID) error {
 			index++
 			for index < len(lines) {
 				adjusted, matched := stripBlockQuote(lines[index], s.source)
-				if !matched {
+				if matched {
+					quoted = append(quoted, adjusted)
+					index++
+					continue
+				}
+				// CommonMark permits an unmarked lazy continuation while the
+				// current quote paragraph can consume the line. A new block or
+				// blank line ends that continuation.
+				candidate := s.lineBytes(lines[index])
+				if isBlank(candidate) || startsBlock(candidate) {
 					break
 				}
-				quoted = append(quoted, adjusted)
+				lazy := lines[index]
+				lazy.lazy = true
+				quoted = append(quoted, lazy)
 				index++
 			}
 			node := s.builder.Add(ast.BlockQuote, ast.Span{Start: lines[start].start, End: lines[index-1].newlineEnd})
@@ -99,32 +110,44 @@ func (s *parseState) parseBlocks(lines []sourceLine, parent ast.NodeID) error {
 		}
 		if indentWidth(content) >= 4 {
 			start := index
-			var spans []ast.Span
+			var codeLines []string
 			for index < len(lines) {
 				candidate := s.lineBytes(lines[index])
 				if !isBlank(candidate) && indentWidth(candidate) < 4 {
 					break
 				}
-				contentStart := lines[index].contentStart
-				if !isBlank(candidate) {
-					contentStart += byteOffsetForIndent(candidate, 4)
+				if isBlank(candidate) {
+					codeLines = append(codeLines, "")
+				} else {
+					codeLines = append(codeLines, stripIndent(candidate, 4))
 				}
-				spans = append(spans, ast.Span{Start: contentStart, End: lines[index].contentEnd})
 				index++
 			}
+			for len(codeLines) > 0 && codeLines[len(codeLines)-1] == "" {
+				codeLines = codeLines[:len(codeLines)-1]
+			}
 			node := s.builder.Add(ast.CodeBlock, ast.Span{Start: lines[start].start, End: lines[index-1].newlineEnd})
-			s.builder.SetText(node, joinSpans(s.source, spans, "\n")+"\n")
+			s.builder.SetText(node, strings.Join(codeLines, "\n")+"\n")
 			s.builder.AppendChild(parent, node)
 			continue
 		}
-		if looksLikeHTMLBlock(content) {
+		if rule, ok := htmlBlockStart(content, false); ok {
 			start := index
 			index++
-			for index < len(lines) && !isBlank(s.lineBytes(lines[index])) {
-				index++
+			if !htmlBlockEnded(content, rule) {
+				for index < len(lines) {
+					candidate := s.lineBytes(lines[index])
+					if rule.untilBlank && isBlank(candidate) {
+						break
+					}
+					index++
+					if htmlBlockEnded(candidate, rule) {
+						break
+					}
+				}
 			}
 			node := s.builder.Add(ast.HTMLBlock, ast.Span{Start: lines[start].start, End: lines[index-1].newlineEnd})
-			s.builder.SetContentSpan(node, ast.Span{Start: lines[start].contentStart, End: lines[index-1].contentEnd})
+			s.builder.SetText(node, s.htmlBlockText(lines[start:index]))
 			s.builder.AppendChild(parent, node)
 			continue
 		}
@@ -142,27 +165,48 @@ func (s *parseState) parseBlocks(lines []sourceLine, parent ast.NodeID) error {
 	return nil
 }
 
+func (s *parseState) htmlBlockText(lines []sourceLine) string {
+	var output strings.Builder
+	for index, line := range lines {
+		output.Write(s.lineBytes(line))
+		if index+1 < len(lines) || line.newlineEnd > line.end {
+			output.WriteByte('\n')
+		}
+	}
+	return output.String()
+}
+
 func (s *parseState) parseParagraph(lines []sourceLine, start int, parent ast.NodeID) (int, error) {
 	index := start
 	var spans []ast.Span
 	for index < len(lines) {
 		content := s.lineBytes(lines[index])
-		if isBlank(content) || index > start && startsBlock(content) {
+		if isBlank(content) {
 			break
 		}
 		if index > start {
-			if _, _, ok := setextUnderline(content); ok {
-				break
-			}
-			if s.parser.profile.Has(profile.Tables) && isTableDelimiter(content) {
-				break
+			if !lines[index].lazy {
+				if _, _, ok := setextUnderline(content); ok {
+					break
+				}
+				if s.parser.profile.Has(profile.Tables) && isTableDelimiter(content) {
+					break
+				}
+				if startsBlock(content) {
+					break
+				}
 			}
 		}
-		spans = append(spans, ast.Span{Start: lines[index].contentStart, End: lines[index].contentEnd})
+		contentStart := lines[index].contentStart + len(content) - len(bytes.TrimLeft(content, " \t"))
+		spans = append(spans, ast.Span{Start: contentStart, End: lines[index].contentEnd})
 		index++
 	}
-	if len(spans) == 1 && index < len(lines) {
+	if len(spans) > 0 && index < len(lines) {
 		if level, _, ok := setextUnderline(s.lineBytes(lines[index])); ok {
+			last := &spans[len(spans)-1]
+			contentLength := last.End - last.Start
+			trimmedLength := len(bytes.TrimRight(s.source[last.Start:last.End], " \t"))
+			last.End -= contentLength - trimmedLength
 			node := s.builder.Add(ast.Heading, ast.Span{Start: lines[start].start, End: lines[index].newlineEnd})
 			s.builder.SetIntegers(node, level, 0)
 			s.builder.AppendChild(parent, node)
@@ -173,6 +217,10 @@ func (s *parseState) parseParagraph(lines []sourceLine, start int, parent ast.No
 			return s.parseTable(lines, start, index, parent)
 		}
 	}
+	if len(spans) > 0 {
+		last := &spans[len(spans)-1]
+		last.End = last.Start + len(bytes.TrimRight(s.source[last.Start:last.End], " \t"))
+	}
 	node := s.builder.Add(ast.Paragraph, ast.Span{Start: lines[start].start, End: lines[index-1].newlineEnd})
 	s.builder.AppendChild(parent, node)
 	s.inlines = append(s.inlines, inlineBlock{node: node, spans: spans})
@@ -181,14 +229,20 @@ func (s *parseState) parseParagraph(lines []sourceLine, start int, parent ast.No
 
 func (s *parseState) parseFence(lines []sourceLine, start int, parent ast.NodeID, marker string, info string) (int, error) {
 	index := start + 1
-	var spans []ast.Span
+	openingIndent := indentWidth(s.lineBytes(lines[start]))
+	var codeLines []string
 	for index < len(lines) {
-		content := bytes.TrimSpace(s.lineBytes(lines[index]))
-		if len(content) >= len(marker) && bytes.Equal(content[:len(marker)], []byte(marker)) && allByte(content, marker[0]) {
+		content := s.lineBytes(lines[index])
+		if isClosingFence(content, marker) {
 			index++
 			break
 		}
-		spans = append(spans, ast.Span{Start: lines[index].contentStart, End: lines[index].contentEnd})
+		remove := minInt(indentWidth(content), openingIndent)
+		if remove == 0 {
+			codeLines = append(codeLines, string(content))
+		} else {
+			codeLines = append(codeLines, stripIndent(content, remove))
+		}
 		index++
 	}
 	end := lines[len(lines)-1].newlineEnd
@@ -196,8 +250,8 @@ func (s *parseState) parseFence(lines []sourceLine, start int, parent ast.NodeID
 		end = lines[index-1].newlineEnd
 	}
 	node := s.builder.Add(ast.CodeBlock, ast.Span{Start: lines[start].start, End: end})
-	s.builder.SetText(node, joinSpans(s.source, spans, "\n")+func() string {
-		if len(spans) > 0 {
+	s.builder.SetText(node, strings.Join(codeLines, "\n")+func() string {
+		if len(codeLines) > 0 {
 			return "\n"
 		}
 		return ""
@@ -208,21 +262,33 @@ func (s *parseState) parseFence(lines []sourceLine, start int, parent ast.NodeID
 	return index, nil
 }
 
+func isClosingFence(line []byte, opening string) bool {
+	if indentWidth(line) > 3 {
+		return false
+	}
+	trimmed := bytes.TrimLeft(line, " \t")
+	run := 0
+	for run < len(trimmed) && trimmed[run] == opening[0] {
+		run++
+	}
+	return run >= len(opening) && len(bytes.Trim(trimmed[run:], " \t")) == 0
+}
+
 type listMarker struct {
 	ordered   bool
 	start     int
+	indent    int
 	width     int
+	offset    int
 	delimiter byte
 }
 
 func (s *parseState) parseList(lines []sourceLine, start int, parent ast.NodeID, first listMarker) (int, error) {
 	index := start
 	list := s.builder.Add(ast.List, ast.Span{Start: lines[start].start, End: lines[start].newlineEnd})
-	if first.ordered {
-		s.builder.SetFlags(list, ast.ListOrdered)
-	}
 	s.builder.SetIntegers(list, first.start, int(first.delimiter))
 	s.builder.AppendChild(parent, list)
+	loose := false
 	for index < len(lines) {
 		marker, ok := parseListMarker(s.lineBytes(lines[index]))
 		if !ok || marker.ordered != first.ordered || marker.delimiter != first.delimiter {
@@ -230,21 +296,46 @@ func (s *parseState) parseList(lines []sourceLine, start int, parent ast.NodeID,
 		}
 		itemStart := index
 		adjusted := lines[index]
-		adjusted.contentStart += marker.width
+		adjusted.contentStart += marker.offset
 		itemLines := []sourceLine{adjusted}
+		itemInitiallyEmpty := adjusted.contentStart == adjusted.contentEnd
 		index++
+		blankPending := false
 		for index < len(lines) {
 			candidate := s.lineBytes(lines[index])
-			if next, matched := parseListMarker(candidate); matched && next.ordered == first.ordered && next.delimiter == first.delimiter {
+			if isThematicBreak(candidate) {
 				break
 			}
-			if !isBlank(candidate) && indentWidth(candidate) == 0 {
+			if next, matched := parseListMarker(candidate); matched && next.indent < marker.width {
+				if next.ordered == first.ordered && next.delimiter == first.delimiter && blankPending {
+					loose = true
+				}
+				break
+			}
+			if isBlank(candidate) {
+				itemLines = append(itemLines, lines[index])
+				blankPending = true
+				index++
+				continue
+			}
+			indent := indentWidth(candidate)
+			if blankPending && itemInitiallyEmpty || indent < marker.width && (blankPending || startsBlock(candidate)) {
 				break
 			}
 			continuation := lines[index]
-			trim := byteOffsetForIndent(candidate, minInt(indentWidth(candidate), marker.width))
+			trim := byteOffsetForIndent(candidate, minInt(indent, marker.width))
 			continuation.contentStart += trim
+			if indent < marker.width {
+				continuation.lazy = true
+			}
 			itemLines = append(itemLines, continuation)
+			if blankPending && indent <= marker.width {
+				trimmed := s.source[continuation.contentStart:continuation.contentEnd]
+				if _, _, _, definition := referenceDefinition(trimmed); definition {
+					loose = true
+				}
+			}
+			blankPending = false
 			index++
 		}
 		item := s.builder.Add(ast.ListItem, ast.Span{Start: lines[itemStart].start, End: lines[index-1].newlineEnd})
@@ -263,10 +354,39 @@ func (s *parseState) parseList(lines []sourceLine, start int, parent ast.NodeID,
 		if err := s.parseBlocks(itemLines, item); err != nil {
 			return 0, err
 		}
+		if listItemIsLoose(s.builder.Document(), s.source, item) {
+			loose = true
+		}
 	}
+	flags := uint32(0)
+	if first.ordered {
+		flags |= ast.ListOrdered
+	}
+	if !loose {
+		flags |= ast.ListTight
+	}
+	s.builder.SetFlags(list, flags)
 	// The arena stores immutable spans, so the list span is represented by its
 	// child item spans during rendering and source mapping.
 	return index, nil
+}
+
+func listItemIsLoose(document *ast.Document, source []byte, item ast.NodeID) bool {
+	previous := ast.NoNode
+	for child := document.Node(item).FirstChild(); child != ast.NoNode; child = document.Node(child).NextSibling() {
+		if previous != ast.NoNode {
+			left := document.Node(previous).Span().End
+			right := document.Node(child).Span().Start
+			if left < right && right <= len(source) {
+				gap := source[left:right]
+				if bytes.Count(gap, []byte{'\n'}) > 0 && len(bytes.TrimSpace(gap)) == 0 {
+					return true
+				}
+			}
+		}
+		previous = child
+	}
+	return false
 }
 
 func (s *parseState) parseTable(lines []sourceLine, headerIndex, delimiterIndex int, parent ast.NodeID) (int, error) {
@@ -348,7 +468,32 @@ func byteOffsetForIndent(line []byte, wanted int) int {
 	return len(line)
 }
 
+func stripIndent(line []byte, wanted int) string {
+	width := 0
+	for index, current := range line {
+		switch current {
+		case ' ':
+			width++
+		case '\t':
+			next := width + 4 - width%4
+			if next > wanted {
+				return strings.Repeat(" ", next-wanted) + string(line[index+1:])
+			}
+			width = next
+		default:
+			return string(line[index:])
+		}
+		if width >= wanted {
+			return string(line[index+1:])
+		}
+	}
+	return ""
+}
+
 func atxHeading(line []byte) (level, start, end int, ok bool) {
+	if indentWidth(line) > 3 {
+		return 0, 0, 0, false
+	}
 	indent := byteOffsetForIndent(line, 3)
 	index := indent
 	for index < len(line) && line[index] == '#' && index-indent < 6 {
@@ -368,13 +513,16 @@ func atxHeading(line []byte) (level, start, end int, ok bool) {
 	for closing > index && line[closing-1] == '#' {
 		closing--
 	}
-	if closing < end && closing > index && (line[closing-1] == ' ' || line[closing-1] == '\t') {
+	if closing < end && (closing == index || line[closing-1] == ' ' || line[closing-1] == '\t') {
 		end = len(bytes.TrimRight(line[index:closing], " \t")) + index
 	}
 	return level, index, end, true
 }
 
 func setextUnderline(line []byte) (level int, marker byte, ok bool) {
+	if indentWidth(line) > 3 {
+		return 0, 0, false
+	}
 	trimmed := bytes.TrimSpace(line)
 	if len(trimmed) == 0 {
 		return 0, 0, false
@@ -390,6 +538,9 @@ func setextUnderline(line []byte) (level int, marker byte, ok bool) {
 }
 
 func isThematicBreak(line []byte) bool {
+	if indentWidth(line) > 3 {
+		return false
+	}
 	trimmed := bytes.TrimSpace(line)
 	count := 0
 	var marker byte
@@ -409,8 +560,11 @@ func isThematicBreak(line []byte) bool {
 }
 
 func fenceStart(line []byte) (marker, info string, ok bool) {
+	if indentWidth(line) > 3 {
+		return "", "", false
+	}
 	trimmed := bytes.TrimLeft(line, " \t")
-	if len(line)-len(trimmed) > 3 || len(trimmed) < 3 || trimmed[0] != '`' && trimmed[0] != '~' {
+	if len(trimmed) < 3 || trimmed[0] != '`' && trimmed[0] != '~' {
 		return "", "", false
 	}
 	length := 0
@@ -442,19 +596,20 @@ func stripBlockQuote(line sourceLine, source []byte) (sourceLine, bool) {
 }
 
 func parseListMarker(line []byte) (listMarker, bool) {
+	if indentWidth(line) > 3 {
+		return listMarker{}, false
+	}
 	indent := byteOffsetForIndent(line, 3)
 	if indent >= len(line) {
 		return listMarker{}, false
 	}
 	if line[indent] == '-' || line[indent] == '+' || line[indent] == '*' {
-		if indent+1 >= len(line) || line[indent+1] != ' ' && line[indent+1] != '\t' {
+		markerEnd := indent + 1
+		padding, offset, ok := listMarkerPadding(line, markerEnd, indent+1)
+		if !ok {
 			return listMarker{}, false
 		}
-		width := indent + 2
-		for width < len(line) && width < indent+5 && line[width] == ' ' {
-			width++
-		}
-		return listMarker{width: width, delimiter: line[indent]}, true
+		return listMarker{indent: indent, width: indent + 1 + padding, offset: offset, delimiter: line[indent]}, true
 	}
 	index := indent
 	for index < len(line) && index-indent < 9 && line[index] >= '0' && line[index] <= '9' {
@@ -463,14 +618,40 @@ func parseListMarker(line []byte) (listMarker, bool) {
 	if index == indent || index >= len(line) || line[index] != '.' && line[index] != ')' {
 		return listMarker{}, false
 	}
-	if index+1 >= len(line) || line[index+1] != ' ' && line[index+1] != '\t' {
+	markerEnd := index + 1
+	padding, offset, ok := listMarkerPadding(line, markerEnd, markerEnd)
+	if !ok {
 		return listMarker{}, false
 	}
 	start, err := strconv.Atoi(string(line[indent:index]))
 	if err != nil {
 		return listMarker{}, false
 	}
-	return listMarker{ordered: true, start: start, width: index + 2, delimiter: line[index]}, true
+	return listMarker{ordered: true, start: start, indent: indent, width: markerEnd + padding, offset: offset, delimiter: line[index]}, true
+}
+
+func listMarkerPadding(line []byte, markerEnd, markerColumns int) (padding, offset int, ok bool) {
+	if markerEnd == len(line) {
+		return 1, markerEnd, true
+	}
+	if line[markerEnd] != ' ' && line[markerEnd] != '\t' {
+		return 0, 0, false
+	}
+	position := markerEnd
+	column := markerColumns
+	for position < len(line) && (line[position] == ' ' || line[position] == '\t') {
+		if line[position] == ' ' {
+			column++
+		} else {
+			column += 4 - column%4
+		}
+		position++
+	}
+	padding = column - markerColumns
+	if padding >= 1 && padding <= 4 {
+		return padding, position, true
+	}
+	return 1, markerEnd + 1, true
 }
 
 func taskMarker(line []byte) (checked bool, consumed int, ok bool) {
@@ -487,25 +668,39 @@ func startsBlock(line []byte) bool {
 	if _, _, _, ok := atxHeading(line); ok {
 		return true
 	}
-	if _, _, ok := fenceStart(line); ok || isThematicBreak(line) || looksLikeHTMLBlock(line) {
+	if _, _, ok := fenceStart(line); ok || isThematicBreak(line) {
 		return true
 	}
-	if _, ok := parseListMarker(line); ok {
+	if _, ok := htmlBlockStart(line, true); ok {
 		return true
+	}
+	if marker, ok := parseListMarker(line); ok {
+		return marker.offset < len(line) && (!marker.ordered || marker.start == 1)
 	}
 	trimmed := bytes.TrimLeft(line, " \t")
 	return len(trimmed) > 0 && trimmed[0] == '>'
 }
 
-func looksLikeHTMLBlock(line []byte) bool {
-	trimmed := bytes.TrimSpace(line)
-	if len(trimmed) < 3 || trimmed[0] != '<' {
-		return false
-	}
-	return bytes.HasPrefix(trimmed, []byte("<!--")) || bytes.HasPrefix(trimmed, []byte("<?")) || bytes.HasPrefix(trimmed, []byte("<![CDATA[")) || trimmed[1] == '/' || trimmed[1] == '!' || unicode.IsLetter(rune(trimmed[1]))
+var rawHTMLBlockTags = map[string]bool{
+	"pre": true, "script": true, "style": true, "textarea": true,
+}
+
+var commonMarkBlockTags = map[string]bool{
+	"address": true, "article": true, "aside": true, "base": true, "basefont": true, "blockquote": true,
+	"body": true, "caption": true, "center": true, "col": true, "colgroup": true, "dd": true, "details": true,
+	"dialog": true, "dir": true, "div": true, "dl": true, "dt": true, "fieldset": true, "figcaption": true,
+	"figure": true, "footer": true, "form": true, "frame": true, "frameset": true, "h1": true, "h2": true,
+	"h3": true, "h4": true, "h5": true, "h6": true, "head": true, "header": true, "hr": true, "html": true,
+	"iframe": true, "legend": true, "li": true, "link": true, "main": true, "menu": true, "menuitem": true,
+	"nav": true, "noframes": true, "ol": true, "optgroup": true, "option": true, "p": true, "param": true,
+	"search": true, "section": true, "source": true, "summary": true, "table": true, "tbody": true, "td": true, "tfoot": true,
+	"th": true, "thead": true, "title": true, "tr": true, "track": true, "ul": true,
 }
 
 func referenceDefinition(line []byte) (destination, title, label string, ok bool) {
+	if indentWidth(line) > 3 {
+		return "", "", "", false
+	}
 	trimmed := strings.TrimSpace(string(line))
 	if !strings.HasPrefix(trimmed, "[") {
 		return "", "", "", false
@@ -604,17 +799,6 @@ func allByte(value []byte, expected byte) bool {
 		}
 	}
 	return true
-}
-
-func joinSpans(source []byte, spans []ast.Span, separator string) string {
-	var builder strings.Builder
-	for index, span := range spans {
-		if index > 0 {
-			builder.WriteString(separator)
-		}
-		builder.Write(source[span.Start:span.End])
-	}
-	return builder.String()
 }
 
 func minInt(left, right int) int {

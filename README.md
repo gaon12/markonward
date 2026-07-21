@@ -8,8 +8,8 @@ or normalized Markdown. Its fourth profile, EnhanceMark, adds conservative
 intent recovery for Korean writing without changing CommonMark or GFM modes.
 
 > **Development status:** this repository is a pre-v1 implementation snapshot,
-> not a conforming v1.0 release. The pinned suites currently pass 357/652
-> CommonMark 0.31.2 examples and 351/649 GFM 0.29 examples. The release workflow
+> not a conforming v1.0 release. The pinned suites currently pass 566/652
+> CommonMark 0.31.2 examples and 553/649 GFM 0.29 examples. The release workflow
 > requires 100% and therefore cannot publish `v1.0.0` yet.
 
 ## Why Markonward?

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"html"
 	"net/mail"
-	"net/url"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -132,8 +131,9 @@ func (p *inlineParser) parseRange(parent ast.NodeID, start, end int) error {
 			if matched {
 				position = next
 			} else {
-				p.appendSource(parent, position, position+1)
-				position++
+				run := byteRun(p.input.data, position, end, '`')
+				p.appendSource(parent, position, position+run)
+				position += run
 			}
 		case current == '!' && position+1 < end && p.input.data[position+1] == '[':
 			next, matched, err := p.parseLink(parent, position, end, true)
@@ -228,6 +228,11 @@ func (p *inlineParser) appendPlainRun(parent ast.NodeID, start, end int) int {
 		if spaces >= 2 {
 			p.appendSource(parent, start, textEnd-spaces)
 			p.appendBreak(parent, position, true)
+			return position + 1
+		}
+		if spaces == 1 {
+			p.appendSource(parent, start, textEnd-1)
+			p.appendBreak(parent, position, false)
 			return position + 1
 		}
 	}
@@ -345,6 +350,14 @@ func (p *inlineParser) findClosing(start, end, openingRun int, marker byte) deli
 	for candidate := start + openingRun; candidate < end; candidate++ {
 		if p.input.data[candidate] == '\\' {
 			candidate++
+			continue
+		}
+		if p.input.data[candidate] == '`' {
+			if codeEnd, matched := matchingCodeSpanEnd(p.input.data, candidate, end); matched {
+				candidate = codeEnd - 1
+				continue
+			}
+			candidate += byteRun(p.input.data, candidate, end, '`') - 1
 			continue
 		}
 		if p.input.data[candidate] != marker {
@@ -486,12 +499,10 @@ func (p *inlineParser) parseLink(parent ast.NodeID, start, end int, image bool) 
 	destination, title := "", ""
 	matched := false
 	if next < end && p.input.data[next] == '(' {
-		closing := findLinkDestinationEnd(p.input.data, next+1, end)
-		if closing >= 0 {
-			rawDestination := string(p.input.data[next+1 : closing])
-			destination, title = parseDestinationAndTitle(rawDestination)
-			next = closing + 1
-			matched = destination != "" || strings.TrimSpace(rawDestination) == ""
+		var parsed bool
+		destination, title, next, parsed = parseInlineLink(p.input.data, next+1, end)
+		if parsed {
+			matched = true
 		}
 	} else if next < end && p.input.data[next] == '[' {
 		closing := findClosingBracket(p.input.data, next+1, end)
@@ -516,8 +527,8 @@ func (p *inlineParser) parseLink(parent ast.NodeID, start, end int, image bool) 
 		kind = ast.Image
 	}
 	node := p.state.builder.Add(kind, p.input.span(start, next))
-	p.state.builder.SetDestination(node, unescapeBackslashes(destination))
-	p.state.builder.SetTitle(node, title)
+	p.state.builder.SetDestination(node, decodeLinkText(destination))
+	p.state.builder.SetTitle(node, decodeLinkText(title))
 	p.state.builder.AppendChild(parent, node)
 	if err := p.parseRange(node, labelStart, labelClose); err != nil {
 		return 0, false, err
@@ -539,23 +550,22 @@ func (p *inlineParser) unclosedStructural(start int, kind ast.Kind, image bool) 
 
 func (p *inlineParser) parseAngle(parent ast.NodeID, start, end int) (int, bool) {
 	relative := bytes.IndexByte(p.input.data[start+1:end], '>')
-	if relative < 0 {
-		return start, false
+	if relative >= 0 {
+		closing := start + 1 + relative
+		inside := string(p.input.data[start+1 : closing])
+		if destination, ok := autolinkDestination(inside); ok {
+			node := p.state.builder.Add(ast.Autolink, p.input.span(start, closing+1))
+			p.state.builder.SetDestination(node, destination)
+			p.state.builder.AppendChild(parent, node)
+			p.appendLiteral(node, start+1, closing, inside)
+			return closing + 1, true
+		}
 	}
-	closing := start + 1 + relative
-	inside := string(p.input.data[start+1 : closing])
-	if destination, ok := autolinkDestination(inside); ok {
-		node := p.state.builder.Add(ast.Autolink, p.input.span(start, closing+1))
-		p.state.builder.SetDestination(node, destination)
+	if htmlEnd, ok := inlineHTMLEnd(p.input.data, start, end); ok {
+		node := p.state.builder.Add(ast.RawHTML, p.input.span(start, htmlEnd))
+		p.state.builder.SetContentSpan(node, p.input.span(start, htmlEnd))
 		p.state.builder.AppendChild(parent, node)
-		p.appendLiteral(node, start+1, closing, inside)
-		return closing + 1, true
-	}
-	if looksLikeInlineHTML(inside) {
-		node := p.state.builder.Add(ast.RawHTML, p.input.span(start, closing+1))
-		p.state.builder.SetContentSpan(node, p.input.span(start, closing+1))
-		p.state.builder.AppendChild(parent, node)
-		return closing + 1, true
+		return htmlEnd, true
 	}
 	return start, false
 }
@@ -564,14 +574,13 @@ func autolinkDestination(inside string) (string, bool) {
 	if strings.ContainsAny(inside, " \t\n<>") {
 		return "", false
 	}
+	if colon := strings.IndexByte(inside, ':'); colon >= 0 && validScheme(inside[:colon]) {
+		return inside, true
+	}
 	if strings.Contains(inside, "@") {
 		if address, err := mail.ParseAddress(inside); err == nil && address.Address == inside {
 			return "mailto:" + inside, true
 		}
-	}
-	parsed, err := url.Parse(inside)
-	if err == nil && parsed.Scheme != "" && validScheme(parsed.Scheme) {
-		return inside, true
 	}
 	return "", false
 }
@@ -742,6 +751,12 @@ func isASCIIPunctuation(current byte) bool {
 func findClosingBracket(data []byte, start, end int) int {
 	depth := 0
 	for position := start; position < end; position++ {
+		if data[position] == '`' {
+			if codeEnd, matched := matchingCodeSpanEnd(data, position, end); matched {
+				position = codeEnd - 1
+				continue
+			}
+		}
 		switch data[position] {
 		case '\\':
 			position++
@@ -757,58 +772,135 @@ func findClosingBracket(data []byte, start, end int) int {
 	return -1
 }
 
-func findLinkDestinationEnd(data []byte, start, end int) int {
-	depth := 0
-	quote := byte(0)
-	for position := start; position < end; position++ {
-		current := data[position]
-		if current == '\\' {
-			position++
+// matchingCodeSpanEnd returns the byte immediately after an exact-length
+// closing backtick run. Brackets and emphasis markers inside a code span do
+// not participate in their respective delimiter algorithms (CommonMark 6.1).
+func matchingCodeSpanEnd(data []byte, start, end int) (int, bool) {
+	run := byteRun(data, start, end, '`')
+	for candidate := start + run; candidate < end; candidate++ {
+		if data[candidate] != '`' {
 			continue
 		}
-		if quote != 0 {
-			if current == quote {
-				quote = 0
-			}
-			continue
+		closing := byteRun(data, candidate, end, '`')
+		if closing == run {
+			return candidate + closing, true
 		}
-		if current == '"' || current == '\'' {
-			quote = current
-			continue
-		}
-		switch current {
-		case '(':
-			depth++
-		case ')':
-			if depth == 0 {
-				return position
-			}
-			depth--
-		case '\n':
-			return -1
-		}
+		candidate += closing - 1
 	}
-	return -1
+	return start, false
 }
 
-func parseDestinationAndTitle(value string) (string, string) {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return "", ""
+func parseInlineLink(data []byte, start, end int) (destination, title string, next int, ok bool) {
+	position, validSpace := skipLinkSpace(data, start, end)
+	if !validSpace {
+		return "", "", start, false
 	}
-	if trimmed[0] == '<' {
-		if closing := strings.IndexByte(trimmed, '>'); closing > 0 {
-			destination := trimmed[1:closing]
-			return destination, strings.Trim(strings.TrimSpace(trimmed[closing+1:]), "\"'()")
+	destinationStart := position
+	if position < end && data[position] == '<' {
+		position++
+		destinationStart = position
+		for position < end && data[position] != '>' {
+			if data[position] == '\n' || data[position] == '<' {
+				return "", "", start, false
+			}
+			if data[position] == '\\' && position+1 < end {
+				position += 2
+				continue
+			}
+			position++
+		}
+		if position >= end {
+			return "", "", start, false
+		}
+		destination = string(data[destinationStart:position])
+		position++
+	} else {
+		depth := 0
+		for position < end {
+			current := data[position]
+			if current == '\\' && position+1 < end {
+				position += 2
+				continue
+			}
+			if current <= ' ' {
+				break
+			}
+			if current == '(' {
+				depth++
+			} else if current == ')' {
+				if depth == 0 {
+					break
+				}
+				depth--
+			}
+			position++
+		}
+		if depth != 0 {
+			return "", "", start, false
+		}
+		destination = string(data[destinationStart:position])
+	}
+	if position < end && data[position] == ')' {
+		return destination, "", position + 1, true
+	}
+	afterSpace, validSpace := skipLinkSpace(data, position, end)
+	if !validSpace || afterSpace == position || afterSpace >= end {
+		return "", "", start, false
+	}
+	position = afterSpace
+	opening := data[position]
+	closing := opening
+	if opening == '(' {
+		closing = ')'
+	} else if opening != '"' && opening != '\'' {
+		return "", "", start, false
+	}
+	position++
+	titleStart := position
+	for position < end && data[position] != closing {
+		if data[position] == '\\' && position+1 < end {
+			position += 2
+			continue
+		}
+		if opening == '(' && data[position] == '(' {
+			return "", "", start, false
+		}
+		position++
+	}
+	if position >= end {
+		return "", "", start, false
+	}
+	title = string(data[titleStart:position])
+	position++
+	position, validSpace = skipLinkSpace(data, position, end)
+	if !validSpace || position >= end || data[position] != ')' {
+		return "", "", start, false
+	}
+	return destination, title, position + 1, true
+}
+
+func skipLinkSpace(data []byte, start, end int) (int, bool) {
+	lineEndings := 0
+	position := start
+	for position < end {
+		switch data[position] {
+		case ' ', '\t':
+			position++
+		case '\n':
+			lineEndings++
+			if lineEndings > 1 {
+				return position, false
+			}
+			position++
+		default:
+			return position, true
 		}
 	}
-	fields := strings.Fields(trimmed)
-	destination := fields[0]
-	title := ""
-	if len(fields) > 1 {
-		title = strings.Trim(strings.Join(fields[1:], " "), "\"'()")
-	}
-	return destination, title
+	return position, true
+}
+
+func decodeLinkText(value string) string {
+	return html.UnescapeString(unescapeBackslashes(value))
 }
 
 func unescapeBackslashes(value string) string {
@@ -824,7 +916,7 @@ func unescapeBackslashes(value string) string {
 }
 
 func validScheme(scheme string) bool {
-	if scheme == "" || !isASCIIAlpha(scheme[0]) {
+	if len(scheme) < 2 || len(scheme) > 32 || !isASCIIAlpha(scheme[0]) {
 		return false
 	}
 	for index := 1; index < len(scheme); index++ {
@@ -838,15 +930,4 @@ func validScheme(scheme string) bool {
 
 func isASCIIAlpha(current byte) bool {
 	return current >= 'a' && current <= 'z' || current >= 'A' && current <= 'Z'
-}
-
-func looksLikeInlineHTML(inside string) bool {
-	if inside == "" {
-		return false
-	}
-	if strings.HasPrefix(inside, "!--") || strings.HasPrefix(inside, "?") || strings.HasPrefix(inside, "!") {
-		return true
-	}
-	trimmed := strings.TrimPrefix(inside, "/")
-	return trimmed != "" && isASCIIAlpha(trimmed[0])
 }

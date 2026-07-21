@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -116,23 +117,42 @@ func checkExamples(t *testing.T, selected profile.Profile, examples []specificat
 	}
 	renderer := markhtml.New(markhtml.WithUnsafe(), markhtml.WithXHTML())
 	mismatches := 0
+	loggedMismatches := 0
+	sectionFilter := os.Getenv("MARKONWARD_SPEC_SECTION")
+	type sectionResult struct{ passed, total int }
+	sections := make(map[string]sectionResult)
 	for _, example := range examples {
+		section := sections[example.Section]
+		section.total++
 		result, parseErr := p.Parse(context.Background(), []byte(example.Markdown))
 		var output bytes.Buffer
 		if parseErr == nil {
 			parseErr = renderer.Render(context.Background(), &output, result.Document)
 		}
 		if parseErr == nil && output.String() == example.HTML {
+			section.passed++
+			sections[example.Section] = section
 			continue
 		}
+		sections[example.Section] = section
 		mismatches++
-		if mismatches <= 5 {
+		if loggedMismatches < 12 && (sectionFilter == "" && mismatches <= 5 || sectionFilter == example.Section) {
+			loggedMismatches++
 			t.Logf("example %d (%s, source lines %d-%d) mismatch\nerror: %v\nwant: %q\n got: %q",
 				example.Example, example.Section, example.StartLine, example.EndLine, parseErr, example.HTML, output.String())
 		}
 	}
 	passed := len(examples) - mismatches
 	t.Logf("%s conformance: %d/%d examples passed", selected, passed, len(examples))
+	sectionNames := make([]string, 0, len(sections))
+	for name := range sections {
+		sectionNames = append(sectionNames, name)
+	}
+	sort.Strings(sectionNames)
+	for _, name := range sectionNames {
+		section := sections[name]
+		t.Logf("  %-45s %3d/%3d", name, section.passed, section.total)
+	}
 	if os.Getenv("MARKONWARD_STRICT_SPECS") == "1" && mismatches != 0 {
 		t.Fatalf("%s conformance gate failed: %d examples mismatched", selected, mismatches)
 	}

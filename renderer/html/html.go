@@ -4,7 +4,6 @@ package html
 import (
 	"context"
 	"fmt"
-	stdhtml "html"
 	"io"
 	"net/url"
 	"strconv"
@@ -93,7 +92,13 @@ func (s *renderState) node(id ast.NodeID, context renderContext) error { //nolin
 		return fmt.Errorf("html: unexpected %s node %d", node.Kind(), id)
 	case ast.Paragraph:
 		if context.inTightList {
-			return s.children(id, context)
+			if err := s.children(id, context); err != nil {
+				return err
+			}
+			if node.NextSibling() != ast.NoNode {
+				return s.write("\n")
+			}
+			return nil
 		}
 		return s.container(id, "<p>", "</p>\n", context)
 	case ast.Heading:
@@ -104,45 +109,51 @@ func (s *renderState) node(id ast.NodeID, context renderContext) error { //nolin
 		tag := "h" + strconv.Itoa(level)
 		return s.container(id, "<"+tag+">", "</"+tag+">\n", context)
 	case ast.BlockQuote:
-		return s.container(id, "<blockquote>\n", "</blockquote>\n", context)
+		return s.container(id, "<blockquote>\n", "</blockquote>\n", renderContext{})
 	case ast.List:
 		ordered := node.Flags()&ast.ListOrdered != 0
 		open, close := "<ul>\n", "</ul>\n"
 		if ordered {
 			start, _ := node.Integers()
 			open = "<ol"
-			if start != 1 && start != 0 {
+			if start != 1 {
 				open += ` start="` + strconv.Itoa(start) + `"`
 			}
 			open += ">\n"
 			close = "</ol>\n"
 		}
-		return s.container(id, open, close, renderContext{inTightList: listIsTight(s.document, id)})
+		return s.container(id, open, close, renderContext{inTightList: node.Flags()&ast.ListTight != 0})
 	case ast.ListItem:
-		return s.container(id, "<li>", "</li>\n", context)
+		opening := "<li>"
+		firstID := node.FirstChild()
+		firstChild := s.document.Node(firstID)
+		if firstID != ast.NoNode && (!context.inTightList || firstChild.Kind() != ast.Paragraph && firstChild.Kind() != ast.TaskCheck) {
+			opening = "<li>\n"
+		}
+		return s.container(id, opening, "</li>\n", context)
 	case ast.ThematicBreak:
-		return s.write(s.void("hr"))
+		return s.write(s.void("hr") + "\n")
 	case ast.CodeBlock:
 		info := strings.Fields(node.Title())
 		if err := s.write("<pre><code"); err != nil {
 			return err
 		}
 		if len(info) > 0 {
-			if err := s.write(` class="language-` + stdhtml.EscapeString(info[0]) + `"`); err != nil {
+			if err := s.write(` class="language-` + escapeHTML(info[0]) + `"`); err != nil {
 				return err
 			}
 		}
-		return s.write(">" + stdhtml.EscapeString(node.Text()) + "</code></pre>\n")
+		return s.write(">" + escapeHTML(node.Text()) + "</code></pre>\n")
 	case ast.HTMLBlock, ast.RawHTML:
 		return s.rawHTML(node.Text(), node.Kind() == ast.HTMLBlock)
 	case ast.Text:
-		return s.write(stdhtml.EscapeString(node.Text()))
+		return s.write(escapeHTML(node.Text()))
 	case ast.SoftBreak:
 		return s.write("\n")
 	case ast.HardBreak:
 		return s.write(s.void("br") + "\n")
 	case ast.CodeSpan:
-		return s.write("<code>" + stdhtml.EscapeString(node.Text()) + "</code>")
+		return s.write("<code>" + escapeHTML(node.Text()) + "</code>")
 	case ast.Emphasis:
 		return s.container(id, "<em>", "</em>", context)
 	case ast.Strong:
@@ -200,11 +211,11 @@ func (s *renderState) link(id ast.NodeID, image bool, context renderContext) err
 	node := s.document.Node(id)
 	if image {
 		alt := collectText(s.document, id)
-		if err := s.write(`<img src="` + s.safeURL(node.Destination()) + `" alt="` + stdhtml.EscapeString(alt) + `"`); err != nil {
+		if err := s.write(`<img src="` + s.safeURL(node.Destination()) + `" alt="` + escapeHTML(alt) + `"`); err != nil {
 			return err
 		}
 		if node.Title() != "" {
-			if err := s.write(` title="` + stdhtml.EscapeString(node.Title()) + `"`); err != nil {
+			if err := s.write(` title="` + escapeHTML(node.Title()) + `"`); err != nil {
 				return err
 			}
 		}
@@ -217,7 +228,7 @@ func (s *renderState) link(id ast.NodeID, image bool, context renderContext) err
 		return err
 	}
 	if node.Title() != "" {
-		if err := s.write(` title="` + stdhtml.EscapeString(node.Title()) + `"`); err != nil {
+		if err := s.write(` title="` + escapeHTML(node.Title()) + `"`); err != nil {
 			return err
 		}
 	}
@@ -239,7 +250,7 @@ func (s *renderState) anchor(id ast.NodeID, label string, context renderContext)
 		if err := s.children(id, context); err != nil {
 			return err
 		}
-	} else if err := s.write(stdhtml.EscapeString(label)); err != nil {
+	} else if err := s.write(escapeHTML(label)); err != nil {
 		return err
 	}
 	return s.write("</a>")
@@ -247,7 +258,7 @@ func (s *renderState) anchor(id ast.NodeID, label string, context renderContext)
 
 func (s *renderState) rawHTML(raw string, block bool) error {
 	if !s.renderer.unsafe {
-		raw = stdhtml.EscapeString(raw)
+		raw = escapeHTML(raw)
 	} else if profileNeedsTagFilter(s.document.Profile()) {
 		raw = applyTagFilter(raw)
 	}
@@ -261,7 +272,70 @@ func (s *renderState) safeURL(destination string) string {
 	if !s.renderer.unsafe && dangerousURL(destination) {
 		return ""
 	}
-	return stdhtml.EscapeString(destination)
+	return escapeHTML(normalizeURL(destination))
+}
+
+// normalizeURL follows CommonMark's URL escaping rules. In particular,
+// backslashes and backticks are data in autolinks and must be percent-encoded
+// instead of being interpreted or emitted verbatim in an HTML attribute.
+func normalizeURL(value string) string {
+	first := -1
+	for index := 0; index < len(value); index++ {
+		if !isURLByteAllowed(value[index]) {
+			first = index
+			break
+		}
+	}
+	if first < 0 {
+		return value
+	}
+	const hexadecimal = "0123456789ABCDEF"
+	var output strings.Builder
+	output.Grow(len(value) + 8)
+	output.WriteString(value[:first])
+	for index := first; index < len(value); index++ {
+		current := value[index]
+		if isURLByteAllowed(current) {
+			output.WriteByte(current)
+			continue
+		}
+		output.WriteByte('%')
+		output.WriteByte(hexadecimal[current>>4])
+		output.WriteByte(hexadecimal[current&0x0f])
+	}
+	return output.String()
+}
+
+func isURLByteAllowed(current byte) bool {
+	if current >= 'a' && current <= 'z' || current >= 'A' && current <= 'Z' || current >= '0' && current <= '9' {
+		return true
+	}
+	return strings.ContainsRune("!#$%&'()*+,-./:;=?@_~", rune(current))
+}
+
+func escapeHTML(value string) string {
+	position := strings.IndexAny(value, `&<>"`)
+	if position < 0 {
+		return value
+	}
+	var output strings.Builder
+	output.Grow(len(value) + 8)
+	output.WriteString(value[:position])
+	for _, current := range value[position:] {
+		switch current {
+		case '&':
+			output.WriteString("&amp;")
+		case '<':
+			output.WriteString("&lt;")
+		case '>':
+			output.WriteString("&gt;")
+		case '"':
+			output.WriteString("&quot;")
+		default:
+			output.WriteRune(current)
+		}
+	}
+	return output.String()
 }
 
 func (s *renderState) void(tag string) string {
@@ -274,21 +348,6 @@ func (s *renderState) void(tag string) string {
 func (s *renderState) write(value string) error {
 	_, err := io.WriteString(s.writer, value)
 	return err
-}
-
-func listIsTight(document *ast.Document, list ast.NodeID) bool {
-	for item := document.Node(list).FirstChild(); item != ast.NoNode; item = document.Node(item).NextSibling() {
-		paragraphs := 0
-		for child := document.Node(item).FirstChild(); child != ast.NoNode; child = document.Node(child).NextSibling() {
-			if document.Node(child).Kind() == ast.Paragraph {
-				paragraphs++
-			}
-		}
-		if paragraphs > 1 {
-			return false
-		}
-	}
-	return true
 }
 
 func alignmentStyle(flags uint32) string {
