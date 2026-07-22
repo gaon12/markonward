@@ -515,11 +515,11 @@ func TestNestedStrikethroughAcrossEmphasisIsCollapsed(t *testing.T) {
 	}
 }
 
-func TestCollapsedNestedStrikethroughKeepsSiblingBoundary(t *testing.T) {
+func TestBranchedRecoveredStrikethroughUsesSafeFlattening(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "~0*0*~0")
 	second := normalize(t, profile.EnhanceMarkV1, first)
-	if first != "~0*0*&#48;~\n" || second != first {
+	if first != "000\n" || second != first {
 		t.Fatalf("collapsed strikethrough boundary: first=%q second=%q", first, second)
 	}
 }
@@ -651,12 +651,21 @@ func TestNestedCloserBeforeControlUsesAsteriskFallback(t *testing.T) {
 	}
 }
 
-func TestRecoveredDuplicateCollapsesAcrossControlSeparator(t *testing.T) {
+func TestBranchedRecoveryAcrossControlUsesSafeFlattening(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "****0**\x00*0")
 	second := normalize(t, profile.EnhanceMarkV1, first)
-	if first != "**0*\x000***\n" || second != first {
+	if first != "0\x000\n" || second != first {
 		t.Fatalf("control-separated recovered duplicate: first=%q second=%q", first, second)
+	}
+}
+
+func TestBranchedNestedRecoveryUsesSafeFlattening(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*!_0_**!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "\\!0\\!\n" || second != first {
+		t.Fatalf("branched nested recovery: first=%q second=%q", first, second)
 	}
 }
 
@@ -734,11 +743,11 @@ func TestCollapsedParentUsesRenderedSiblingContextForNestedStrong(t *testing.T) 
 	}
 }
 
-func TestTextBeforeCollapsedRecoveredSiblingDoesNotAddEntityBoundary(t *testing.T) {
+func TestBranchedRecoveredStrongUsesSafeFlattening(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "****0**0**00")
 	second := normalize(t, profile.EnhanceMarkV1, first)
-	if first != "**0000**\n" || second != first {
+	if first != "0000\n" || second != first {
 		t.Fatalf("text before collapsed sibling: first=%q second=%q", first, second)
 	}
 }

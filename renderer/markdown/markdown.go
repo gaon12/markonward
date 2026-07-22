@@ -112,7 +112,7 @@ func (s *renderState) block(id ast.NodeID) error { //nolint:gocyclo // The switc
 		// whose delimiter stacks parse differently. Preserve their visible
 		// content instead of emitting a normalization that changes on pass two.
 		recoveredCount := s.countRecoveredFormatting(id)
-		if s.hasAmbiguousRecoveredPath(id, 0) || recoveredCount >= 3 || (recoveredCount >= 2 && s.hasAdjacentNestedRecovery(id)) || s.hasAmbiguousRecoveredFactoring(id) {
+		if s.hasAmbiguousRecoveredPath(id, 0) || recoveredCount >= 3 || (recoveredCount >= 2 && s.hasAmbiguousNestedRecovery(id)) || s.hasAmbiguousRecoveredFactoring(id) {
 			if err := s.flattenFormatting(id); err != nil {
 				return err
 			}
@@ -218,15 +218,30 @@ func (s *renderState) hasAmbiguousRecoveredPath(parent ast.NodeID, depth int) bo
 	return false
 }
 
-func (s *renderState) hasAdjacentNestedRecovery(parent ast.NodeID) bool {
+func (s *renderState) hasAmbiguousNestedRecovery(parent ast.NodeID) bool {
 	for childID := s.document.Node(parent).FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
 		child := s.document.Node(childID)
-		if isFormattingKind(child.Kind()) && child.Flags()&ast.InlineRecoveredDelimiter != 0 && s.hasRecoveredFormattingDescendant(childID) && s.hasFormattingPeer(child) {
+		branched := s.hasMultipleFormattingChildren(childID)
+		if isFormattingKind(child.Kind()) && child.Flags()&ast.InlineRecoveredDelimiter != 0 && s.hasRecoveredFormattingDescendant(childID) && (branched || s.hasFormattingPeer(child)) {
 			return true
 		}
-		if s.hasAdjacentNestedRecovery(childID) {
+		if s.hasAmbiguousNestedRecovery(childID) {
 			return true
 		}
+	}
+	return false
+}
+
+func (s *renderState) hasMultipleFormattingChildren(parent ast.NodeID) bool {
+	found := false
+	for childID := s.document.Node(parent).FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		if !isFormattingKind(s.document.Node(childID).Kind()) {
+			continue
+		}
+		if found {
+			return true
+		}
+		found = true
 	}
 	return false
 }

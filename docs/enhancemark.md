@@ -71,7 +71,7 @@ renderer uses that metadata to choose delimiter runs that remain equivalent on
 a second parse. It may use numeric character references at ambiguous boundaries
 and collapse semantically duplicate recovered formatting layers. If a paragraph
 contains three or more recovered formatting nodes, has a nested recovered path
-next to another formatting node, or has a recovered structure
+that branches or borders another formatting node, or has a recovered structure
 has no unambiguous Markdown spelling, the renderer conservatively emits the
 escaped visible text for that paragraph. This fallback affects normalized
 Markdown only; the parsed AST and HTML/plain-text renderers retain the recovered
