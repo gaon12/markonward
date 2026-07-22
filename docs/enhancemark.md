@@ -65,6 +65,17 @@ markers therefore close from the inside out as the recursive calls return. The
 normalized Markdown renderer always writes explicit closing markers, so a
 recovered document does not require recovery on its second parse.
 
+The public AST records the source delimiter (`*`, `_`, `~`, or `~~`) and whether
+an inline node came from paragraph-end recovery. The normalized Markdown
+renderer uses that metadata to choose delimiter runs that remain equivalent on
+a second parse. It may use numeric character references at ambiguous boundaries
+and collapse semantically duplicate recovered formatting layers. If a paragraph
+contains three or more recovered formatting nodes, or a recovered structure
+has no unambiguous Markdown spelling, the renderer conservatively emits the
+escaped visible text for that paragraph. This fallback affects normalized
+Markdown only; the parsed AST and HTML/plain-text renderers retain the recovered
+structure.
+
 ## Stability boundary
 
 Rule IDs, diagnostics, pair tables, and operand tables are part of the

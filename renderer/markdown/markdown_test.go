@@ -37,6 +37,604 @@ func TestNormalizedMarkdownIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAllSpaceCodeSpanIsIdempotent(t *testing.T) {
+	t.Parallel()
+	source := "` `00"
+	first := normalize(t, profile.EnhanceMarkV1, source)
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if second != first {
+		t.Fatalf("all-space code span normalization is not idempotent: first=%q second=%q", first, second)
+	}
+}
+
+func TestEscapedClosingParenthesisDoesNotBecomeAList(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, `0\)`)
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0\\)\n" || second != first {
+		t.Fatalf("escaped list marker normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestOrderedListZeroStartIsPreserved(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0) item")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0. item\n" || second != first {
+		t.Fatalf("zero-start list normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestRecoveredMixedDelimiterNestingIsIdempotent(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "_0*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "_00_\n" || second != first {
+		t.Fatalf("mixed recovered delimiter normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestLiteralURLPrefixDoesNotBecomeAnAutolink(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, " http://!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "http\\://\\!\n" || second != first {
+		t.Fatalf("literal URL prefix normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestInvalidAngleAutolinkDoesNotAbsorbFollowingEscape(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "http://>!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "http://>&#33;\n" || second != first {
+		t.Fatalf("invalid-angle autolink boundary: first=%q second=%q", first, second)
+	}
+}
+
+func TestAdjacentEmphasisDelimitersRemainDistinct(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0*0**!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0*0\\*\\*\\!*\n" || second != first {
+		t.Fatalf("adjacent emphasis normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestRecoveredSingleTildeNestingIsIdempotent(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "~!~00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "~\\!00~\n" || second != first {
+		t.Fatalf("single-tilde recovery normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestRecoveredEmphasisUsesTheRuleOfThree(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*!*0*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*\\!_0_*&#48;\n" || second != first {
+		t.Fatalf("rule-of-three recovery normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestDeepRecoveredFormattingAlternatesDelimiters(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, " *!*0**00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "\\!000\n" || second != first {
+		t.Fatalf("deep recovered formatting normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedIntrawordEmphasisUsesStableBoundaryEntity(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**0*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**0*0***\n" || second != first {
+		t.Fatalf("nested intraword emphasis normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedFormattingCombinesRunsAtWordBoundaries(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0***0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "&#48;***0***\n" || second != first {
+		t.Fatalf("combined formatting-run normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestDeepStrongFormattingCombinesRunsAtWordBoundaries(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**0****0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "00\n" || second != first {
+		t.Fatalf("deep combined strong-run normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestFormattingEdgeWhitespaceUsesStableEntities(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0\f")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*0&#12;*\n" || second != first {
+		t.Fatalf("formatting-edge whitespace normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestFormattingEdgeWhitespaceIgnoresTextNodeSplits(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0 \f")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*0&#32;&#12;*\n" || second != first {
+		t.Fatalf("split formatting-edge whitespace normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestLiteralCarriageReturnDoesNotBecomeALineEnding(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0\r ")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0&#13;\n" || second != first {
+		t.Fatalf("literal carriage-return normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestNULBeforeFormattingIsPreserved(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0\x00*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0*\x000*\n" || second != first {
+		t.Fatalf("NUL formatting-boundary normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestControlAfterFormattingUsesStableEntity(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**!*000*\x04")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**\\!_000_&#4;**\n" || second != first {
+		t.Fatalf("control formatting-boundary normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestNULBeforeNestedFormattingKeepsLiteralContent(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**\x00*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***\x000***\n" || second != first {
+		t.Fatalf("NUL nested-formatting normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestRecoveredNestedRunUsesRenderedParentMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*\x00****0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***\x000***\n" || second != first {
+		t.Fatalf("recovered nested-run normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestUnrepresentableControlMovesInsideInvalidCloser(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0*0 *0*\x00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0*0 _0\x00_*\n" || second != first {
+		t.Fatalf("unrepresentable control boundary normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestDeepRecoveredStrongCombinesRuns(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "******!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "\\!\n" || second != first {
+		t.Fatalf("empty recovered formatting normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestNULMovesInsideCombinedFormattingRun(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "\x00***0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***\x000***\n" || second != first {
+		t.Fatalf("NUL combined-formatting normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestExtendedEmailThatIsNotAnAngleAutolinkStaysBare(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0@.0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0@.0\n" || second != first {
+		t.Fatalf("extended email autolink normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestExtendedEmailAfterEscapedBoundaryStaysLiteral(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "<0.@a.")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "\\<0\\.@a\\.\n" || second != first {
+		t.Fatalf("boundary-prefixed extended email: first=%q second=%q", first, second)
+	}
+}
+
+func TestExtendedURLWithAngleCharacterStaysBare(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "http://>")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "http://>\n" || second != first {
+		t.Fatalf("extended URL autolink normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestAdjacentNestedEmphasisUsesDistinctMarkers(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*!***0**0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "\\!00\n" || second != first {
+		t.Fatalf("adjacent nested emphasis normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestNULBeforeFormattingKeepsFirstContentRuneLiteral(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "\x00*0**0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*\x000**0***\n" || second != first {
+		t.Fatalf("NUL formatting-opener normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestMixedDirectNestingDoesNotReuseOuterMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "_!____*!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "\\!\\!\n" || second != first {
+		t.Fatalf("mixed direct nesting normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestUnrepresentableControlMovesInsideOpeningDelimiter(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "****\x00*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "\x000\n" || second != first {
+		t.Fatalf("control opening-boundary normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestMovedOpeningControlMakesFollowingSpaceStable(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "\x00* \x00*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*\x00 \x00*\n" || second != first {
+		t.Fatalf("moved control and space normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestRecoveredParentKeepsDistinctMarkerAcrossMovedControl(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**\x00*0*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**_\x000_&#48;**\n" || second != first {
+		t.Fatalf("recovered control-boundary normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestMovedControlLetsOnlyNestedChildCombineDelimiterRun(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**\x00*0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***\x000***\n" || second != first {
+		t.Fatalf("moved-control only-child normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestDeepNestedFormattingKeepsWordLikeBoundaryLiteral(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0 *!*0**0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0 \\!00\n" || second != first {
+		t.Fatalf("deep word-like formatting boundary: first=%q second=%q", first, second)
+	}
+}
+
+func TestAsteriskFallbackHonorsRuleOfThree(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "****0*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "00\n" || second != first {
+		t.Fatalf("asterisk rule-of-three normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestAdjacentListsKeepDistinctMarkers(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*\n+ 0000")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "-\n\n+ 0000\n" || second != first {
+		t.Fatalf("adjacent list normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedEmptyListsDoNotBecomeThematicBreak(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "+ * *")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "- + *\n" || second != first {
+		t.Fatalf("nested empty-list normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestOuterBoundaryAccountsForEntityOnlyFirstChild(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0*0*****0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "000\n" || second != first {
+		t.Fatalf("entity-only first-child normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestInlineOpeningAccountsForEntityOnlyFirstChild(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "00**0****0**")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0&#48;**&#48;__0__**\n" || second != first {
+		t.Fatalf("inline entity-only first-child boundary: first=%q second=%q", first, second)
+	}
+}
+
+func TestInlineOpeningAfterWordProtectsNestedDelimiter(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0*_\x00*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "&#48;*_\x00_*\n" || second != first {
+		t.Fatalf("nested opening delimiter boundary: first=%q second=%q", first, second)
+	}
+}
+
+func TestCombinedDelimiterRunCanOpenAfterWord(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0**\x00*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0***\x000***\n" || second != first {
+		t.Fatalf("combined opening delimiter run: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedStrikethroughAcrossEmphasisIsCollapsed(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "~*~0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0\n" || second != first {
+		t.Fatalf("nested strikethrough normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestFormattingSeparatedByMovedControlUsesDistinctMarkers(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**0**\x00*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**0**_\x000_\n" || second != first {
+		t.Fatalf("control-separated formatting normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestSameFormattingSeparatedByControlIsMerged(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0*\x00*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*0\x000*\n" || second != first {
+		t.Fatalf("control-separated matching formatting: first=%q second=%q", first, second)
+	}
+}
+
+func TestAdjacentSameFormattingNodesAreMerged(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0**!*0**!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*0\\!_0\\!_*\n" || second != first {
+		t.Fatalf("adjacent formatting-group normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0\\!0\n" || second != first {
+		t.Fatalf("punctuation recovered factoring: first=%q second=%q", first, second)
+	}
+}
+
+func TestControlContentStillHonorsRuleOfThree(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "****0*\x00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0\x00\n" || second != first {
+		t.Fatalf("control-content rule-of-three normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestStrongRunDoesNotAbsorbNestedEmphasisChain(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**_0*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "00\n" || second != first {
+		t.Fatalf("strong and nested emphasis normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedFormattingIgnoresEscapedDelimiterBoundary(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "_*_*00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "_\\*00_\n" || second != first {
+		t.Fatalf("escaped merged-boundary normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedFormattingUsesActualMergedParentMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0 *0**0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0 00\n" || second != first {
+		t.Fatalf("actual merged-parent marker normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedGroupCanonicalizesDirectStrongRun(t *testing.T) {
+	t.Parallel()
+	source := "__*_ * *!_*!       ***00000"
+	first := normalize(t, profile.EnhanceMarkV1, source)
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != second {
+		t.Fatalf("merged direct-strong normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedStrongGroupCombinesWithItsEmphasisParent(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0****0*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***00***&#48;\n" || second != first {
+		t.Fatalf("merged strong-parent combination: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedFormattingMovesControlOnlyRemainderBeforeNestedCloser(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0**\x00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***0\x00***\n" || second != first {
+		t.Fatalf("control-only group remainder: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedCloserBeforeControlUsesAsteriskFallback(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0**\x000")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***0**\x000*\n" || second != first {
+		t.Fatalf("control-following closer normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestRecoveredDuplicateCollapsesAcrossControlSeparator(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "****0**\x00*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**0*\x000***\n" || second != first {
+		t.Fatalf("control-separated recovered duplicate: first=%q second=%q", first, second)
+	}
+}
+
+func TestImmediateEmphasisParentWinsMarkerSelection(t *testing.T) {
+	t.Parallel()
+	source := "*****!*0 *!"
+	first := normalize(t, profile.EnhanceMarkV1, source)
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != second {
+		t.Fatalf("immediate emphasis-parent normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestAdjacentNestedFormattingUsesDistinctOpeningMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*!*0***0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*\\!_0_**0***\n" || second != first {
+		t.Fatalf("adjacent nested formatting normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestDuplicateRecoveredFormattingLayersAreCollapsed(t *testing.T) {
+	t.Parallel()
+	source := "*******! *0"
+	first := normalize(t, profile.EnhanceMarkV1, source)
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != second {
+		t.Fatalf("duplicate recovered-layer normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestValidFormattingInsideDuplicateRecoveredLayerIsCollapsed(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "* *0*_*0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "- *00*\n" || second != first {
+		t.Fatalf("valid formatting under recovered duplicate: first=%q second=%q", first, second)
+	}
+}
+
+func TestCollapsedEmphasisDescendantDoesNotBlockCombinedRun(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**_*0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***0***\n" || second != first {
+		t.Fatalf("collapsed emphasis descendant: first=%q second=%q", first, second)
+	}
+}
+
+func TestRuleOfThreeUsesRenderedAncestorStack(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "****0*0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**0*0***\n" || second != first {
+		t.Fatalf("rendered ancestor rule-of-three: first=%q second=%q", first, second)
+	}
+}
+
+func TestBoundaryPredictionSkipsCollapsedRecovery(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0****0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0**0**\n" || second != first {
+		t.Fatalf("collapsed recovery boundary prediction: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedGroupStrongAccountsForEarlierMembers(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0****!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != second {
+		t.Fatalf("merged earlier-member normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestRecoveredLayerThatCouldFactorAcrossSiblingsIsFlattened(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0****0**")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "00\n" || second != first {
+		t.Fatalf("ambiguous recovered factoring: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedGroupProtectsOpeningAfterLaterEntityRewrite(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0*0****!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "&#48;*&#48;__\\!__*\n" || second != first {
+		t.Fatalf("merged opening-boundary normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestThreeRecoveredSiblingsTriggerSafeFlattening(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0****0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "00\n" || second != first {
+		t.Fatalf("recovered sibling flattening: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredEnhanceFormattingGetsExplicitCloser(t *testing.T) {
 	t.Parallel()
 	got := normalize(t, profile.EnhanceMarkV1, "**unfinished")
