@@ -254,11 +254,20 @@ func TestMovedPrefixControlStillProtectsOuterFormattingOpener(t *testing.T) {
 	}
 }
 
-func TestRecoveredNestedRunUsesRenderedParentMarker(t *testing.T) {
+func TestAdjacentNestedRecoveryWithMovedControlUsesSafeFlattening(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0***\x00*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0\x000\n" || second != first {
+		t.Fatalf("nested emphasis after moved control: first=%q second=%q", first, second)
+	}
+}
+
+func TestAdjacentNestedRecoveryUsesSafeFlattening(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "*\x00****0")
 	second := normalize(t, profile.EnhanceMarkV1, first)
-	if first != "***\x000***\n" || second != first {
+	if first != "\x000\n" || second != first {
 		t.Fatalf("recovered nested-run normalization: first=%q second=%q", first, second)
 	}
 }
@@ -515,6 +524,15 @@ func TestCollapsedNestedStrikethroughKeepsSiblingBoundary(t *testing.T) {
 	}
 }
 
+func TestCollapsedNestedStrikethroughDoesNotAddTrailingEntity(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "~~0 ~0~0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "~~0 00~~\n" || second != first {
+		t.Fatalf("collapsed strikethrough trailing boundary: first=%q second=%q", first, second)
+	}
+}
+
 func TestFormattingSeparatedByMovedControlUsesDistinctMarkers(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "**0**\x00*0")
@@ -533,11 +551,11 @@ func TestSameFormattingSeparatedByControlIsMerged(t *testing.T) {
 	}
 }
 
-func TestAdjacentSameFormattingNodesAreMerged(t *testing.T) {
+func TestAdjacentRecoveredFormattingUsesSafeFlattening(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "*0**!*0**!")
 	second := normalize(t, profile.EnhanceMarkV1, first)
-	if first != "*0\\!_0\\!_*\n" || second != first {
+	if first != "0\\!0\\!\n" || second != first {
 		t.Fatalf("adjacent formatting-group normalization: first=%q second=%q", first, second)
 	}
 }
@@ -779,11 +797,11 @@ func TestParallelRecoveredLayersThatCouldFactorAreFlattened(t *testing.T) {
 	}
 }
 
-func TestMergedGroupProtectsOpeningAfterLaterEntityRewrite(t *testing.T) {
+func TestMergedGroupWithNestedRecoveryUsesSafeFlattening(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "0*0****!")
 	second := normalize(t, profile.EnhanceMarkV1, first)
-	if first != "&#48;*&#48;__\\!__*\n" || second != first {
+	if first != "00\\!\n" || second != first {
 		t.Fatalf("merged opening-boundary normalization: first=%q second=%q", first, second)
 	}
 }

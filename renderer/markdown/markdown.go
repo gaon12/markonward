@@ -111,7 +111,8 @@ func (s *renderState) block(id ast.NodeID) error { //nolint:gocyclo // The switc
 		// Deep or factorable recovery trees can have several source spellings
 		// whose delimiter stacks parse differently. Preserve their visible
 		// content instead of emitting a normalization that changes on pass two.
-		if s.hasAmbiguousRecoveredPath(id, 0) || s.countRecoveredFormatting(id) >= 3 || s.hasAmbiguousRecoveredFactoring(id) {
+		recoveredCount := s.countRecoveredFormatting(id)
+		if s.hasAmbiguousRecoveredPath(id, 0) || recoveredCount >= 3 || (recoveredCount >= 2 && s.hasAdjacentNestedRecovery(id)) || s.hasAmbiguousRecoveredFactoring(id) {
 			if err := s.flattenFormatting(id); err != nil {
 				return err
 			}
@@ -212,6 +213,51 @@ func (s *renderState) hasAmbiguousRecoveredPath(parent ast.NodeID, depth int) bo
 		}
 		if s.hasAmbiguousRecoveredPath(childID, childDepth) {
 			return true
+		}
+	}
+	return false
+}
+
+func (s *renderState) hasAdjacentNestedRecovery(parent ast.NodeID) bool {
+	for childID := s.document.Node(parent).FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		child := s.document.Node(childID)
+		if isFormattingKind(child.Kind()) && child.Flags()&ast.InlineRecoveredDelimiter != 0 && s.hasRecoveredFormattingDescendant(childID) && s.hasFormattingPeer(child) {
+			return true
+		}
+		if s.hasAdjacentNestedRecovery(childID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *renderState) hasRecoveredFormattingDescendant(parent ast.NodeID) bool {
+	for childID := s.document.Node(parent).FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		child := s.document.Node(childID)
+		if (isFormattingKind(child.Kind()) && child.Flags()&ast.InlineRecoveredDelimiter != 0) || s.hasRecoveredFormattingDescendant(childID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *renderState) hasFormattingPeer(node ast.Node) bool {
+	for siblingID := node.PreviousSibling(); siblingID != ast.NoNode; siblingID = s.document.Node(siblingID).PreviousSibling() {
+		sibling := s.document.Node(siblingID)
+		if isFormattingKind(sibling.Kind()) {
+			return true
+		}
+		if sibling.Kind() != ast.Text || !onlyUnrepresentableControls(sibling.Text()) {
+			break
+		}
+	}
+	for siblingID := node.NextSibling(); siblingID != ast.NoNode; siblingID = s.document.Node(siblingID).NextSibling() {
+		sibling := s.document.Node(siblingID)
+		if isFormattingKind(sibling.Kind()) {
+			return true
+		}
+		if sibling.Kind() != ast.Text || !onlyUnrepresentableControls(sibling.Text()) {
+			break
 		}
 	}
 	return false
@@ -1298,10 +1344,15 @@ func (s *renderState) needsLeadingEntity(node ast.Node, text string) bool {
 	if !isEntityBoundaryRune(first) {
 		return false
 	}
-	if (previous.Kind() == ast.Emphasis || previous.Kind() == ast.Strong) && s.hasDuplicateRecoveredLayer(previous) && !s.collapsedFormattingEndsWithDelimiter(previous) {
+	if s.isCollapsedFormatting(previous) && !s.collapsedFormattingEndsWithDelimiter(previous) {
 		return false
 	}
 	return previous.Kind() == ast.Emphasis || previous.Kind() == ast.Strong || previous.Kind() == ast.Strikethrough
+}
+
+func (s *renderState) isCollapsedFormatting(node ast.Node) bool {
+	return (isEmphasisKind(node.Kind()) && s.hasDuplicateRecoveredLayer(node)) ||
+		(node.Kind() == ast.Strikethrough && s.hasStrikethroughAncestor(node))
 }
 
 func (s *renderState) collapsedFormattingEndsWithDelimiter(node ast.Node) bool {
@@ -1334,7 +1385,7 @@ func (s *renderState) needsTrailingEntity(node ast.Node, text string) bool {
 		return false
 	}
 	next := s.document.Node(node.NextSibling())
-	if (next.Kind() == ast.Emphasis || next.Kind() == ast.Strong) && s.hasDuplicateRecoveredLayer(next) {
+	if s.isCollapsedFormatting(next) {
 		return false
 	}
 	if isFormattingKind(next.Kind()) && s.startsWithUnrepresentableControl(next) && !s.asteriskFallbackViolatesRuleOfThree(next) {
