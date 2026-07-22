@@ -56,6 +56,15 @@ func TestEscapedClosingParenthesisDoesNotBecomeAList(t *testing.T) {
 	}
 }
 
+func TestDocumentLeadingIndentIsCanonicalized(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, " 0\x00!0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0\x00\\!0\n" || second != first {
+		t.Fatalf("document leading indentation: first=%q second=%q", first, second)
+	}
+}
+
 func TestOrderedListZeroStartIsPreserved(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "0) item")

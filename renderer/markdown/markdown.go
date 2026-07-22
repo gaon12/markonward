@@ -49,7 +49,12 @@ func (r *Renderer) Render(ctx context.Context, writer io.Writer, document *ast.D
 	if err := state.blocks(document.Root()); err != nil {
 		return err
 	}
-	result := strings.TrimRight(state.output.String(), " \t\n")
+	// Every block renderer emits an explicit marker when indentation is
+	// semantically significant (for example, fenced code instead of indented
+	// code). A leading space or tab can therefore only be insignificant source
+	// indentation and would otherwise disappear on the next parse.
+	result := strings.TrimLeft(state.output.String(), " \t")
+	result = strings.TrimRight(result, " \t\n")
 	if result != "" {
 		result += "\n"
 	}
