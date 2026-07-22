@@ -457,13 +457,22 @@ func (s *renderState) stabilizeFormattingGroupOpeningBoundary(first, last ast.No
 
 func (s *renderState) protectTrailingOutputRune() {
 	output := s.output.String()
-	previous, size := utf8.DecodeLastRuneInString(output)
+	boundary := len(output)
+	for boundary > 0 {
+		current, size := utf8.DecodeLastRuneInString(output[:boundary])
+		if !unicode.IsControl(current) || numericEntityRoundTrips(current) {
+			break
+		}
+		boundary -= size
+	}
+	previous, size := utf8.DecodeLastRuneInString(output[:boundary])
 	if !isEntityBoundaryRune(previous) {
 		return
 	}
 	s.output.Reset()
-	s.output.WriteString(output[:len(output)-size])
+	s.output.WriteString(output[:boundary-size])
 	s.writeNumericEntity(previous)
+	s.output.WriteString(output[boundary:])
 }
 
 func (s *renderState) laterFormattingGroupMemberNeedsEntity(first, last ast.NodeID) bool {
@@ -749,14 +758,7 @@ func (s *renderState) stabilizeInlineOpeningBoundary(node ast.Node) {
 	if len(s.inlineStack) == 0 || !s.inlineOpeningNeedsProtection(node, s.inlineStack[len(s.inlineStack)-1].marker) {
 		return
 	}
-	output := s.output.String()
-	previous, size := utf8.DecodeLastRuneInString(output)
-	if !isEntityBoundaryRune(previous) {
-		return
-	}
-	s.output.Reset()
-	s.output.WriteString(output[:len(output)-size])
-	s.writeNumericEntity(previous)
+	s.protectTrailingOutputRune()
 }
 
 func (s *renderState) inlineOpeningNeedsProtection(node ast.Node, marker byte) bool {

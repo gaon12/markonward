@@ -245,6 +245,15 @@ func TestAdjustedParentMarkerProtectsOuterFormattingOpener(t *testing.T) {
 	}
 }
 
+func TestMovedPrefixControlStillProtectsOuterFormattingOpener(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0\x00***0*00**")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "&#48;**_\x000_&#48;0**\n" || second != first {
+		t.Fatalf("outer opener after moved prefix control: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredNestedRunUsesRenderedParentMarker(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "*\x00****0")
