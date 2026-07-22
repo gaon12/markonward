@@ -113,9 +113,6 @@ func (s *renderState) node(id ast.NodeID, depth int) error { //nolint:gocyclo //
 		s.output.WriteString(strings.Repeat("  ", depth))
 		if parent.Flags()&ast.ListOrdered != 0 {
 			start, _ := parent.Integers()
-			if start == 0 {
-				start = 1
-			}
 			s.output.WriteString(strconv.Itoa(start+index-1) + ". ")
 		} else {
 			s.output.WriteString("- ")

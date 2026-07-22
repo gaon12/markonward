@@ -32,3 +32,22 @@ func TestPlainTextPreservesUsefulStructure(t *testing.T) {
 		}
 	}
 }
+
+func TestPlainTextPreservesZeroListStart(t *testing.T) {
+	t.Parallel()
+	p, err := parser.New(profile.CommonMark0312)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.Parse(context.Background(), []byte("0) first\n1) second\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := plaintext.New().Render(context.Background(), &output, result.Document); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.String(); got != "0. first\n\n1. second\n" {
+		t.Fatalf("zero-start ordered list = %q", got)
+	}
+}

@@ -45,6 +45,15 @@ const (
 	TableAlignLeft
 	TableAlignCenter
 	TableAlignRight
+	// InlineDelimiterUnderscore records that an Emphasis or Strong node uses
+	// the underscore delimiter. An unset bit selects the asterisk delimiter.
+	InlineDelimiterUnderscore
+	// StrikethroughSingleDelimiter records EnhanceMark's single-tilde form.
+	// An unset bit selects the GFM double-tilde delimiter.
+	StrikethroughSingleDelimiter
+	// InlineRecoveredDelimiter marks an inline container synthesized by
+	// paragraph-end recovery rather than matched source delimiters.
+	InlineRecoveredDelimiter
 )
 
 var kindNames = [...]string{

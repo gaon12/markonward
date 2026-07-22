@@ -96,6 +96,29 @@ func TestEnhanceRecoversAtParagraphEnd(t *testing.T) {
 	}
 }
 
+func TestInlineNodesRecordSourceDelimiterAndRecovery(t *testing.T) {
+	t.Parallel()
+
+	underscore := paragraphChildren(parse(t, profile.CommonMark0312, "_emphasis_"))
+	if len(underscore) != 1 || underscore[0].Kind() != ast.Emphasis || underscore[0].Flags()&ast.InlineDelimiterUnderscore == 0 {
+		t.Fatalf("underscore emphasis metadata = %#v", underscore)
+	}
+
+	singleTilde := paragraphChildren(parse(t, profile.EnhanceMarkV1, "~strike~"))
+	if len(singleTilde) != 1 || singleTilde[0].Kind() != ast.Strikethrough || singleTilde[0].Flags()&ast.StrikethroughSingleDelimiter == 0 {
+		t.Fatalf("single-tilde metadata = %#v", singleTilde)
+	}
+
+	recovered := paragraphChildren(parse(t, profile.EnhanceMarkV1, "__unfinished"))
+	if len(recovered) != 1 || recovered[0].Kind() != ast.Strong {
+		t.Fatalf("recovered strong nodes = %#v", recovered)
+	}
+	want := ast.InlineRecoveredDelimiter | ast.InlineDelimiterUnderscore
+	if got := recovered[0].Flags() & want; got != want {
+		t.Fatalf("recovered strong flags = %08b, want bits %08b", recovered[0].Flags(), want)
+	}
+}
+
 func TestParseCopyOwnsSource(t *testing.T) {
 	t.Parallel()
 	p, err := parser.New(profile.CommonMark0312)

@@ -133,6 +133,9 @@ func (p *inlineParser) parseRangeWithPlan(parent ast.NodeID, start, end int, pla
 				kind = ast.Strong
 			}
 			node := p.state.builder.Add(kind, p.input.span(pair.openStart, pair.closeStart+pair.closeLength))
+			if pair.kind == '_' {
+				p.state.builder.SetFlags(node, ast.InlineDelimiterUnderscore)
+			}
 			p.state.builder.AppendChild(parent, node)
 			if err := p.parseRangeWithPlan(node, pair.openStart+pair.openLength, pair.closeStart, plan); err != nil {
 				return err
@@ -422,6 +425,11 @@ func (p *inlineParser) parseDelimiter(parent ast.NodeID, start, end int, marker 
 	}
 	kind := delimiterKind(marker, match.openLength)
 	node := p.state.builder.Add(kind, p.input.span(start, match.next))
+	if marker == '_' {
+		p.state.builder.SetFlags(node, ast.InlineDelimiterUnderscore)
+	} else if marker == '~' && match.openLength == 1 {
+		p.state.builder.SetFlags(node, ast.StrikethroughSingleDelimiter)
+	}
 	p.state.builder.AppendChild(parent, node)
 	if err := p.parseRange(node, start+match.openLength, match.contentEnd); err != nil {
 		return 0, false, err
@@ -473,7 +481,7 @@ func (p *inlineParser) findClosing(start, end, openingRun int, marker byte) deli
 		if marker != '~' {
 			_, openCanClose := delimiterFlanking(p.input.data, start, openingRun, marker, 0, end)
 			closeCanOpen, _ := delimiterFlanking(p.input.data, candidate, closingRun, marker, start, end)
-			if openCanClose && closeCanOpen && (openingRun+closingRun)%3 == 0 && (openingRun%3 != 0 || closingRun%3 != 0) {
+			if (openCanClose || closeCanOpen) && (openingRun+closingRun)%3 == 0 && (openingRun%3 != 0 || closingRun%3 != 0) {
 				candidate += closingRun - 1
 				continue
 			}
@@ -503,6 +511,13 @@ func (p *inlineParser) recoverUnclosed(parent ast.NodeID, start, end, openingLen
 			return start, false, nil
 		}
 		node := p.state.builder.Add(kind, p.input.span(start, end))
+		flags := ast.InlineRecoveredDelimiter
+		if (kind == ast.Emphasis || kind == ast.Strong) && p.input.data[start] == '_' {
+			flags |= ast.InlineDelimiterUnderscore
+		} else if kind == ast.Strikethrough && openingLength == 1 {
+			flags |= ast.StrikethroughSingleDelimiter
+		}
+		p.state.builder.SetFlags(node, flags)
 		p.state.builder.AppendChild(parent, node)
 		if kind == ast.CodeSpan {
 			p.state.builder.SetText(node, strings.ReplaceAll(string(p.input.data[start+openingLength:end]), "\n", " "))
