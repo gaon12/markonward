@@ -383,11 +383,15 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 	firstNode := s.document.Node(first)
 	length := delimiterLength(firstNode.Kind())
 	delimiter := s.inlineDelimiter(firstNode, length)
-	if firstNode.Kind() == ast.Strong && len(s.inlineStack) != 0 {
+	if len(s.inlineStack) != 0 {
 		parentFrame := s.inlineStack[len(s.inlineStack)-1]
 		parent := s.document.Node(firstNode.Parent())
-		if parentFrame.kind == ast.Emphasis && parent.FirstChild() == first && parent.LastChild() == last && !s.formattingGroupHasEmphasisDescendant(first, last) {
+		coversParent := parent.FirstChild() == first && parent.LastChild() == last
+		if firstNode.Kind() == ast.Strong && parentFrame.kind == ast.Emphasis && coversParent && !s.formattingGroupHasEmphasisDescendant(first, last) {
 			delimiter = strings.Repeat(string(parentFrame.marker), length)
+		}
+		if firstNode.Kind() == ast.Emphasis && parentFrame.kind == ast.Strong && coversParent && !s.formattingGroupHasEmphasisDescendant(first, last) {
+			delimiter = string(parentFrame.marker)
 		}
 	}
 	s.stabilizeFormattingGroupOpeningBoundary(first, last, delimiter[0])

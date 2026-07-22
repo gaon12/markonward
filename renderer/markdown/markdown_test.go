@@ -569,6 +569,15 @@ func TestAdjacentRecoveredFormattingUsesSafeFlattening(t *testing.T) {
 	}
 }
 
+func TestMergedEmphasisGroupCombinesWithStrongParent(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**_0_*0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***00***\n" || second != first {
+		t.Fatalf("merged emphasis group under strong: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")
