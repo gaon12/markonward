@@ -65,6 +65,15 @@ func TestOrderedListZeroStartIsPreserved(t *testing.T) {
 	}
 }
 
+func TestBlankCodeFenceLineInsideListHasNoGrowingIndent(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "* ```")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "- ```\n\n  ```\n" || second != first {
+		t.Fatalf("blank fenced-code line in list: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredMixedDelimiterNestingIsIdempotent(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0*0")
@@ -101,6 +110,15 @@ func TestAdjacentEmphasisDelimitersRemainDistinct(t *testing.T) {
 	}
 }
 
+func TestMergedFormattingTreatsMemberWhitespaceAsInterior(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0** \x00*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*0 \x00*&#48;\n" || second != first {
+		t.Fatalf("merged member whitespace: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredSingleTildeNestingIsIdempotent(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "~!~00")
@@ -110,11 +128,11 @@ func TestRecoveredSingleTildeNestingIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestRecoveredEmphasisUsesTheRuleOfThree(t *testing.T) {
+func TestRecoveredDuplicateEmphasisCollapsesBeforeRuleOfThree(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "*!*0*0")
 	second := normalize(t, profile.EnhanceMarkV1, first)
-	if first != "*\\!_0_*&#48;\n" || second != first {
+	if first != "*\\!0*&#48;\n" || second != first {
 		t.Fatalf("rule-of-three recovery normalization: first=%q second=%q", first, second)
 	}
 }
@@ -209,6 +227,15 @@ func TestNULBeforeNestedFormattingKeepsLiteralContent(t *testing.T) {
 	}
 }
 
+func TestLeadingControlMoveProtectsOuterFormattingOpener(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0**\x00*0*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "&#48;**_\x000_&#48;**\n" || second != first {
+		t.Fatalf("outer opener before moved leading control: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredNestedRunUsesRenderedParentMarker(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "*\x00****0")
@@ -218,11 +245,11 @@ func TestRecoveredNestedRunUsesRenderedParentMarker(t *testing.T) {
 	}
 }
 
-func TestUnrepresentableControlMovesInsideInvalidCloser(t *testing.T) {
+func TestCollapsedDuplicateFormattingKeepsUnrepresentableControl(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "0*0 *0*\x00")
 	second := normalize(t, profile.EnhanceMarkV1, first)
-	if first != "0*0 _0\x00_*\n" || second != first {
+	if first != "0*0 0*\x00\n" || second != first {
 		t.Fatalf("unrepresentable control boundary normalization: first=%q second=%q", first, second)
 	}
 }
@@ -254,11 +281,20 @@ func TestExtendedEmailThatIsNotAnAngleAutolinkStaysBare(t *testing.T) {
 	}
 }
 
-func TestExtendedEmailAfterEscapedBoundaryStaysLiteral(t *testing.T) {
+func TestTrimmedExtendedEmailUsesExplicitLink(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, ".@0.")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "[\\.@0](mailto:.@0)\\.\n" || second != first {
+		t.Fatalf("trimmed extended email normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestTrimmedExtendedEmailAfterEscapedBoundaryUsesExplicitLink(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "<0.@a.")
 	second := normalize(t, profile.EnhanceMarkV1, first)
-	if first != "\\<0\\.@a\\.\n" || second != first {
+	if first != "\\<[0\\.@a](mailto:0.@a)\\.\n" || second != first {
 		t.Fatalf("boundary-prefixed extended email: first=%q second=%q", first, second)
 	}
 }
@@ -335,6 +371,24 @@ func TestMovedControlKeepsDistinctMarkerWhenContentFollows(t *testing.T) {
 	}
 }
 
+func TestRecoveredNestedStrongBeforeControlUsesDistinctSiblingMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "****0***0*\x00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**0**_0\x00_\n" || second != first {
+		t.Fatalf("recovered nested strong before control: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedEmphasisDoesNotCombineAcrossFollowingPeer(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**\x00*0****0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**_\x000_**_0_\n" || second != first {
+		t.Fatalf("nested emphasis before following peer: first=%q second=%q", first, second)
+	}
+}
+
 func TestMovedLeadingControlKeepsDistinctMarkerAcrossMergedMembers(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "\x00***0**0")
@@ -398,20 +452,20 @@ func TestOuterBoundaryAccountsForEntityOnlyFirstChild(t *testing.T) {
 	}
 }
 
-func TestInlineOpeningAccountsForEntityOnlyFirstChild(t *testing.T) {
+func TestDuplicateStrongLayersCollapseAcrossTextSiblings(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "00**0****0**")
 	second := normalize(t, profile.EnhanceMarkV1, first)
-	if first != "0&#48;**&#48;__0__**\n" || second != first {
+	if first != "00**00**\n" || second != first {
 		t.Fatalf("inline entity-only first-child boundary: first=%q second=%q", first, second)
 	}
 }
 
-func TestInlineOpeningAfterWordProtectsNestedDelimiter(t *testing.T) {
+func TestRecoveredDuplicateEmphasisCollapsesAfterWord(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "0*_\x00*")
 	second := normalize(t, profile.EnhanceMarkV1, first)
-	if first != "&#48;*_\x00_*\n" || second != first {
+	if first != "0*\x00*\n" || second != first {
 		t.Fatalf("nested opening delimiter boundary: first=%q second=%q", first, second)
 	}
 }

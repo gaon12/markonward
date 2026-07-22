@@ -478,7 +478,7 @@ func (s *renderState) prepareFormattingGroupMember(node ast.Node) {
 		return
 	}
 	first := s.document.Node(firstID)
-	if (first.Kind() == ast.Emphasis || first.Kind() == ast.Strong) && s.hasDuplicateRecoveredAncestor(first) {
+	if (first.Kind() == ast.Emphasis || first.Kind() == ast.Strong) && s.hasDuplicateRecoveredLayer(first) {
 		return
 	}
 	if isFormattingKind(first.Kind()) && !s.startsWithWordLikeText(first) {
@@ -545,14 +545,14 @@ func (s *renderState) inline(id ast.NodeID) error { //nolint:gocyclo // The swit
 		}
 		s.output.WriteString(delimiter + content + delimiter)
 	case ast.Emphasis:
-		if s.hasDuplicateRecoveredAncestor(node) {
+		if s.hasDuplicateRecoveredLayer(node) {
 			s.prepareCollapsedFormatting(node)
 			return s.inlines(id)
 		}
 		delimiter := s.inlineDelimiter(node, 1)
 		return s.inlineContainer(id, delimiter, delimiter)
 	case ast.Strong:
-		if s.hasDuplicateRecoveredAncestor(node) {
+		if s.hasDuplicateRecoveredLayer(node) {
 			s.prepareCollapsedFormatting(node)
 			return s.inlines(id)
 		}
@@ -596,6 +596,15 @@ func (s *renderState) inline(id ast.NodeID) error { //nolint:gocyclo // The swit
 		s.output.WriteByte(')')
 	case ast.Autolink:
 		if address, ok := strings.CutPrefix(node.Destination(), "mailto:"); ok && s.renderer.profile.Has(profile.ExtendedAutolinks) && !validAngleEmail(address) {
+			if !validBareExtendedEmail(address) {
+				// Extended email recognition may trim trailing punctuation from a
+				// larger source token. If the resulting destination cannot stand on
+				// its own as a bare autolink, retain the link with explicit syntax.
+				s.output.WriteByte('[')
+				s.output.WriteString(escapeText(address))
+				s.output.WriteString("](" + escapeDestination(node.Destination()) + ")")
+				break
+			}
 			if previousID := node.PreviousSibling(); previousID != ast.NoNode {
 				previous := s.document.Node(previousID)
 				previousRune, _ := utf8.DecodeLastRuneInString(previous.Text())
@@ -652,10 +661,11 @@ func (s *renderState) prepareCollapsedFormatting(node ast.Node) {
 	s.skipText, s.skipByte = firstID, size
 }
 
-func (s *renderState) hasDuplicateRecoveredAncestor(node ast.Node) bool {
+func (s *renderState) hasDuplicateRecoveredLayer(node ast.Node) bool {
+	recovered := node.Flags()&ast.InlineRecoveredDelimiter != 0
 	for parentID := node.Parent(); parentID != ast.NoNode; parentID = s.document.Node(parentID).Parent() {
 		parent := s.document.Node(parentID)
-		if parent.Kind() == node.Kind() && parent.Flags()&ast.InlineRecoveredDelimiter != 0 {
+		if parent.Kind() == node.Kind() && (recovered || parent.Flags()&ast.InlineRecoveredDelimiter != 0) {
 			return true
 		}
 	}
@@ -721,7 +731,13 @@ func (s *renderState) inlineOpeningNeedsProtection(node ast.Node, marker byte) b
 		return false
 	}
 	first := s.document.Node(firstID)
-	for (first.Kind() == ast.Emphasis || first.Kind() == ast.Strong) && s.hasDuplicateRecoveredAncestor(first) {
+	movedControls := false
+	for first.Kind() == ast.Text && onlyUnrepresentableControls(first.Text()) && first.NextSibling() != ast.NoNode {
+		movedControls = true
+		firstID = first.NextSibling()
+		first = s.document.Node(firstID)
+	}
+	for (first.Kind() == ast.Emphasis || first.Kind() == ast.Strong) && s.hasDuplicateRecoveredLayer(first) {
 		firstID = first.FirstChild()
 		if firstID == ast.NoNode {
 			return false
@@ -731,6 +747,9 @@ func (s *renderState) inlineOpeningNeedsProtection(node ast.Node, marker byte) b
 	needsProtection := isFormattingKind(first.Kind())
 	if needsProtection {
 		childMarker := s.effectiveInlineDelimiterMarker(first)
+		if movedControls && isEmphasisKind(node.Kind()) && isEmphasisKind(first.Kind()) && s.onlyChildAfterMovingControls(first) && !s.parentHasFollowingFormattingPeer(first) {
+			childMarker = string(marker)
+		}
 		needsProtection = childMarker[0] != marker || marker == '_'
 	}
 	if first.Kind() == ast.Text {
@@ -904,7 +923,7 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 			}
 		}
 	}
-	if marker == "_" && s.followedByUnrepresentableControl(node) {
+	if marker == "_" && s.followedByUnrepresentableControl(node) && s.previousFormattingSibling(node) == ast.NoNode {
 		marker = "*"
 	}
 	if marker == "_" {
@@ -921,7 +940,7 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 			parentID := node.Parent()
 			if parentID != ast.NoNode {
 				parent := s.document.Node(parentID)
-				if isEmphasisKind(parent.Kind()) && s.previousFormattingSibling(node) == ast.NoNode && s.canReuseParentMarkerAcrossControls(node) && (node.Flags()&ast.InlineRecoveredDelimiter != 0 || s.onlyChildAfterMovingControls(node)) {
+				if isEmphasisKind(parent.Kind()) && s.previousFormattingSibling(node) == ast.NoNode && !s.parentHasFollowingFormattingPeer(node) && s.canReuseParentMarkerAcrossControls(node) && (node.Flags()&ast.InlineRecoveredDelimiter != 0 || s.onlyChildAfterMovingControls(node)) {
 					parentMarker := s.effectiveInlineDelimiterMarker(parent)
 					if len(s.inlineStack) != 0 && s.inlineStack[len(s.inlineStack)-1].kind == parent.Kind() {
 						parentMarker = string(s.inlineStack[len(s.inlineStack)-1].marker)
@@ -954,6 +973,23 @@ func (s *renderState) canReuseParentMarkerAcrossControls(node ast.Node) bool {
 	return !parent.hasPreceding || s.onlyChildAfterMovingControls(node)
 }
 
+func (s *renderState) parentHasFollowingFormattingPeer(node ast.Node) bool {
+	parentID := node.Parent()
+	if parentID == ast.NoNode {
+		return false
+	}
+	for nextID := s.document.Node(parentID).NextSibling(); nextID != ast.NoNode; nextID = s.document.Node(nextID).NextSibling() {
+		next := s.document.Node(nextID)
+		if next.Kind() == node.Kind() {
+			return true
+		}
+		if next.Kind() != ast.Text || !onlyUnrepresentableControls(next.Text()) {
+			return false
+		}
+	}
+	return false
+}
+
 func (s *renderState) followedByUnrepresentableControl(node ast.Node) bool {
 	if next := node.NextSibling(); next != ast.NoNode && s.startsWithUnrepresentableControl(s.document.Node(next)) {
 		return true
@@ -984,7 +1020,7 @@ func (s *renderState) effectiveInlineDelimiterMarker(node ast.Node) string {
 		if parent.Kind() == ast.Emphasis || parent.Kind() == ast.Strong {
 			parentMarker := s.effectiveInlineDelimiterMarker(parent)
 			onlyChild := parent.FirstChild() == node.ID() && parent.LastChild() == node.ID()
-			combineRun := onlyChild && (node.Kind() != ast.Emphasis || !s.combinedRunHasEmphasis(parent) && !s.hasEmphasisDescendant(node))
+			combineRun := onlyChild && !s.parentHasFollowingFormattingPeer(node) && (node.Kind() != ast.Emphasis || !s.combinedRunHasEmphasis(parent) && !s.hasEmphasisDescendant(node))
 			if combineRun {
 				marker = parentMarker
 			} else if marker == parentMarker {
@@ -1006,7 +1042,7 @@ func (s *renderState) effectiveInlineDelimiterMarker(node ast.Node) string {
 func (s *renderState) hasEmphasisDescendant(node ast.Node) bool {
 	for childID := node.FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
 		child := s.document.Node(childID)
-		if (child.Kind() == ast.Emphasis && !s.hasDuplicateRecoveredAncestor(child)) || s.hasEmphasisDescendant(child) {
+		if (child.Kind() == ast.Emphasis && !s.hasDuplicateRecoveredLayer(child)) || s.hasEmphasisDescendant(child) {
 			return true
 		}
 	}
@@ -1078,7 +1114,7 @@ func (s *renderState) writeText(node ast.Node, text string) {
 	start, end := 0, len(text)
 	parent := s.document.Node(node.Parent())
 	formattedParent := parent.Kind() == ast.Emphasis || parent.Kind() == ast.Strong || parent.Kind() == ast.Strikethrough
-	if formattedParent && !s.prefixedInline[parent.ID()] && s.atFormattingLeadingEdge(parent, node) {
+	if formattedParent && !s.prefixedInline[parent.ID()] && s.atRenderedFormattingLeadingEdge(parent, node) {
 		for start < end {
 			current, size := utf8.DecodeRuneInString(text[start:end])
 			if !unicode.IsSpace(current) {
@@ -1089,7 +1125,7 @@ func (s *renderState) writeText(node ast.Node, text string) {
 		}
 	}
 	trailingStart := end
-	if formattedParent && s.atFormattingTrailingEdge(parent, node) {
+	if formattedParent && s.atRenderedFormattingTrailingEdge(parent, node) {
 		for trailingStart > start {
 			current, size := utf8.DecodeLastRuneInString(text[start:trailingStart])
 			if !unicode.IsSpace(current) {
@@ -1165,6 +1201,17 @@ func (s *renderState) atFormattingLeadingEdge(parent, node ast.Node) bool {
 	return true
 }
 
+func (s *renderState) atRenderedFormattingLeadingEdge(parent, node ast.Node) bool {
+	if !s.atFormattingLeadingEdge(parent, node) {
+		return false
+	}
+	if len(s.inlineStack) == 0 {
+		return true
+	}
+	frame := s.inlineStack[len(s.inlineStack)-1]
+	return !frame.merged || frame.kind != parent.Kind() || !frame.hasPreceding
+}
+
 func (s *renderState) atFormattingTrailingEdge(parent, node ast.Node) bool {
 	for siblingID := node.NextSibling(); siblingID != ast.NoNode; siblingID = s.document.Node(siblingID).NextSibling() {
 		sibling := s.document.Node(siblingID)
@@ -1173,6 +1220,17 @@ func (s *renderState) atFormattingTrailingEdge(parent, node ast.Node) bool {
 		}
 	}
 	return true
+}
+
+func (s *renderState) atRenderedFormattingTrailingEdge(parent, node ast.Node) bool {
+	if !s.atFormattingTrailingEdge(parent, node) {
+		return false
+	}
+	if len(s.inlineStack) == 0 {
+		return true
+	}
+	frame := s.inlineStack[len(s.inlineStack)-1]
+	return !frame.merged || frame.kind != parent.Kind() || !frame.hasFollowing
 }
 
 func (s *renderState) writeNumericEntity(current rune) {
@@ -1191,7 +1249,7 @@ func (s *renderState) needsLeadingEntity(node ast.Node, text string) bool {
 	if !isEntityBoundaryRune(first) {
 		return false
 	}
-	if (previous.Kind() == ast.Emphasis || previous.Kind() == ast.Strong) && s.hasDuplicateRecoveredAncestor(previous) && !s.collapsedFormattingEndsWithDelimiter(previous) {
+	if (previous.Kind() == ast.Emphasis || previous.Kind() == ast.Strong) && s.hasDuplicateRecoveredLayer(previous) && !s.collapsedFormattingEndsWithDelimiter(previous) {
 		return false
 	}
 	return previous.Kind() == ast.Emphasis || previous.Kind() == ast.Strong || previous.Kind() == ast.Strikethrough
@@ -1207,7 +1265,7 @@ func (s *renderState) collapsedFormattingEndsWithDelimiter(node ast.Node) bool {
 			continue
 		}
 		if isFormattingKind(child.Kind()) {
-			if ((child.Kind() == ast.Emphasis || child.Kind() == ast.Strong) && s.hasDuplicateRecoveredAncestor(child)) ||
+			if ((child.Kind() == ast.Emphasis || child.Kind() == ast.Strong) && s.hasDuplicateRecoveredLayer(child)) ||
 				(child.Kind() == ast.Strikethrough && s.hasStrikethroughAncestor(child)) {
 				return s.collapsedFormattingEndsWithDelimiter(child)
 			}
@@ -1227,7 +1285,7 @@ func (s *renderState) needsTrailingEntity(node ast.Node, text string) bool {
 		return false
 	}
 	next := s.document.Node(node.NextSibling())
-	if (next.Kind() == ast.Emphasis || next.Kind() == ast.Strong) && s.hasDuplicateRecoveredAncestor(next) {
+	if (next.Kind() == ast.Emphasis || next.Kind() == ast.Strong) && s.hasDuplicateRecoveredLayer(next) {
 		return false
 	}
 	if isFormattingKind(next.Kind()) && s.startsWithUnrepresentableControl(next) && !s.asteriskFallbackViolatesRuleOfThree(next) {
@@ -1268,7 +1326,7 @@ func delimiterLength(kind ast.Kind) int {
 
 func (s *renderState) startsWithWordLikeText(node ast.Node) bool {
 	child := s.document.Node(node.FirstChild())
-	for (child.Kind() == ast.Emphasis || child.Kind() == ast.Strong) && s.hasDuplicateRecoveredAncestor(child) {
+	for (child.Kind() == ast.Emphasis || child.Kind() == ast.Strong) && s.hasDuplicateRecoveredLayer(child) {
 		child = s.document.Node(child.FirstChild())
 	}
 	if child.Kind() != ast.Text || child.Text() == "" {
@@ -1317,6 +1375,28 @@ func validAngleEmail(address string) bool {
 	return err == nil && parsed.Address == address
 }
 
+func validBareExtendedEmail(address string) bool {
+	position := 0
+	for position < len(address) && (isASCIIAlphanumeric(address[position]) || strings.ContainsRune(".-_+", rune(address[position]))) {
+		position++
+	}
+	if position == 0 || position >= len(address) || address[position] != '@' {
+		return false
+	}
+	position++
+	domainStart := position
+	hasPeriod := false
+	for position < len(address) && (isASCIIAlphanumeric(address[position]) || strings.ContainsRune(".-_", rune(address[position]))) {
+		hasPeriod = hasPeriod || address[position] == '.'
+		position++
+	}
+	return position == len(address) && position > domainStart && hasPeriod && address[position-1] != '.' && address[position-1] != '-' && address[position-1] != '_'
+}
+
+func isASCIIAlphanumeric(current byte) bool {
+	return current >= '0' && current <= '9' || current >= 'A' && current <= 'Z' || current >= 'a' && current <= 'z'
+}
+
 func (s *renderState) renderList(list ast.NodeID, depth int) error {
 	node := s.document.Node(list)
 	ordered := node.Flags()&ast.ListOrdered != 0
@@ -1334,6 +1414,10 @@ func (s *renderState) renderList(list ast.NodeID, depth int) error {
 		}
 		lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 		for lineIndex, line := range lines {
+			if line == "" && lineIndex != 0 {
+				s.output.WriteByte('\n')
+				continue
+			}
 			s.output.WriteString(strings.Repeat("  ", depth))
 			if lineIndex == 0 {
 				s.output.WriteString(prefix)
