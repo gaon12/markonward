@@ -326,6 +326,24 @@ func TestRecoveredParentKeepsDistinctMarkerAcrossMovedControl(t *testing.T) {
 	}
 }
 
+func TestMovedControlKeepsDistinctMarkerWhenContentFollows(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**\x00*0*0**0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**_\x000_&#48;**&#48;\n" || second != first {
+		t.Fatalf("moved control with following content: first=%q second=%q", first, second)
+	}
+}
+
+func TestMovedLeadingControlKeepsDistinctMarkerAcrossMergedMembers(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "\x00***0**0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*__\x000__&#48;*\n" || second != first {
+		t.Fatalf("leading control in merged formatting: first=%q second=%q", first, second)
+	}
+}
+
 func TestMovedControlLetsOnlyNestedChildCombineDelimiterRun(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "**\x00*0*")
@@ -416,6 +434,15 @@ func TestNestedStrikethroughAcrossEmphasisIsCollapsed(t *testing.T) {
 	}
 }
 
+func TestCollapsedNestedStrikethroughKeepsSiblingBoundary(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "~0*0*~0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "~0*0*&#48;~\n" || second != first {
+		t.Fatalf("collapsed strikethrough boundary: first=%q second=%q", first, second)
+	}
+}
+
 func TestFormattingSeparatedByMovedControlUsesDistinctMarkers(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "**0**\x00*0")
@@ -467,6 +494,15 @@ func TestStrongRunDoesNotAbsorbNestedEmphasisChain(t *testing.T) {
 	second := normalize(t, profile.EnhanceMarkV1, first)
 	if first != "00\n" || second != first {
 		t.Fatalf("strong and nested emphasis normalization: first=%q second=%q", first, second)
+	}
+}
+
+func TestCombinedOuterRunAlternatesNestedEmphasisMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "****!0*000***")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***_\\!0_&#48;00***\n" || second != first {
+		t.Fatalf("combined outer run with nested emphasis: first=%q second=%q", first, second)
 	}
 }
 
@@ -572,6 +608,42 @@ func TestValidFormattingInsideDuplicateRecoveredLayerIsCollapsed(t *testing.T) {
 	}
 }
 
+func TestCollapsedRecoveredSiblingDoesNotAddEntityBoundary(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "_*0*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "_00_\n" || second != first {
+		t.Fatalf("collapsed sibling entity boundary: first=%q second=%q", first, second)
+	}
+}
+
+func TestCollapsedRecoveredSiblingRetainsNestedCloserBoundary(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "_0*0**0*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "_00**0**&#48;_\n" || second != first {
+		t.Fatalf("nested closer in collapsed sibling: first=%q second=%q", first, second)
+	}
+}
+
+func TestCollapsedParentUsesRenderedSiblingContextForNestedStrong(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0*****0*****0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*&#48;____0____&#48;*\n" || second != first {
+		t.Fatalf("rendered sibling context for nested strong: first=%q second=%q", first, second)
+	}
+}
+
+func TestTextBeforeCollapsedRecoveredSiblingDoesNotAddEntityBoundary(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "****0**0**00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**0000**\n" || second != first {
+		t.Fatalf("text before collapsed sibling: first=%q second=%q", first, second)
+	}
+}
+
 func TestCollapsedEmphasisDescendantDoesNotBlockCombinedRun(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "**_*0*")
@@ -614,6 +686,15 @@ func TestRecoveredLayerThatCouldFactorAcrossSiblingsIsFlattened(t *testing.T) {
 	second := normalize(t, profile.EnhanceMarkV1, first)
 	if first != "00\n" || second != first {
 		t.Fatalf("ambiguous recovered factoring: first=%q second=%q", first, second)
+	}
+}
+
+func TestParallelRecoveredLayersThatCouldFactorAreFlattened(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0****0**")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "00\\*\n" || second != first {
+		t.Fatalf("parallel recovered factoring: first=%q second=%q", first, second)
 	}
 }
 

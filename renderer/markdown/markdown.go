@@ -72,6 +72,7 @@ type renderState struct {
 }
 
 type inlineFrame struct {
+	owner            ast.NodeID
 	kind             ast.Kind
 	marker           byte
 	merged           bool
@@ -227,6 +228,13 @@ func (s *renderState) hasAmbiguousRecoveredFactoring(parent ast.NodeID) bool {
 				if (previous != ast.NoNode && s.document.Node(previous).Kind() == nested.Kind()) || (next != ast.NoNode && s.document.Node(next).Kind() == nested.Kind()) {
 					return true
 				}
+				if next != ast.NoNode {
+					nextNode := s.document.Node(next)
+					nextNestedID := nextNode.FirstChild()
+					if nextNode.Kind() == child.Kind() && nextNestedID != ast.NoNode && nextNestedID == nextNode.LastChild() && s.document.Node(nextNestedID).Kind() == nested.Kind() {
+						return true
+					}
+				}
 			}
 		}
 		if s.hasAmbiguousRecoveredFactoring(childID) {
@@ -259,6 +267,10 @@ func (s *renderState) flattenFormatting(parent ast.NodeID) error {
 func (s *renderState) inlines(parent ast.NodeID) error {
 	for child := s.document.Node(parent).FirstChild(); child != ast.NoNode; {
 		last := s.lastMergeableFormattingSibling(child)
+		if len(s.inlineStack) != 0 && s.inlineStack[len(s.inlineStack)-1].owner == parent {
+			s.inlineStack[len(s.inlineStack)-1].hasPreceding = child != s.document.Node(parent).FirstChild()
+			s.inlineStack[len(s.inlineStack)-1].hasFollowing = last != s.document.Node(parent).LastChild()
+		}
 		if last != child {
 			if err := s.inlineFormattingGroup(child, last); err != nil {
 				return err
@@ -317,7 +329,7 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 	s.output.WriteString(delimiter)
 	s.output.WriteString(boundary)
 	s.prefixedInline[first] = boundary != ""
-	s.inlineStack = append(s.inlineStack, inlineFrame{kind: firstNode.Kind(), marker: delimiter[0], merged: true})
+	s.inlineStack = append(s.inlineStack, inlineFrame{owner: ast.NoNode, kind: firstNode.Kind(), marker: delimiter[0], merged: true})
 	defer func() { s.inlineStack = s.inlineStack[:len(s.inlineStack)-1] }()
 	for current := first; ; current = s.document.Node(current).NextSibling() {
 		currentNode := s.document.Node(current)
@@ -534,12 +546,14 @@ func (s *renderState) inline(id ast.NodeID) error { //nolint:gocyclo // The swit
 		s.output.WriteString(delimiter + content + delimiter)
 	case ast.Emphasis:
 		if s.hasDuplicateRecoveredAncestor(node) {
+			s.prepareCollapsedFormatting(node)
 			return s.inlines(id)
 		}
 		delimiter := s.inlineDelimiter(node, 1)
 		return s.inlineContainer(id, delimiter, delimiter)
 	case ast.Strong:
 		if s.hasDuplicateRecoveredAncestor(node) {
+			s.prepareCollapsedFormatting(node)
 			return s.inlines(id)
 		}
 		delimiter := s.inlineDelimiter(node, 2)
@@ -552,6 +566,7 @@ func (s *renderState) inline(id ast.NodeID) error { //nolint:gocyclo // The swit
 			// Repeating deletion does not add semantics, while adjacent tilde
 			// closers are ambiguous to Markdown delimiter parsers. Normalize any
 			// nested deletion to its ancestor's single formatting layer.
+			s.prepareCollapsedFormatting(node)
 			return s.inlines(id)
 		}
 		delimiter := "~~"
@@ -619,6 +634,24 @@ func (s *renderState) inline(id ast.NodeID) error { //nolint:gocyclo // The swit
 	return nil
 }
 
+func (s *renderState) prepareCollapsedFormatting(node ast.Node) {
+	previousID := node.PreviousSibling()
+	firstID := node.FirstChild()
+	if previousID == ast.NoNode || firstID == ast.NoNode || !isFormattingKind(s.document.Node(previousID).Kind()) {
+		return
+	}
+	first := s.document.Node(firstID)
+	if first.Kind() != ast.Text || first.Text() == "" || !endsWithUnescapedFormattingDelimiter(s.output.String()) {
+		return
+	}
+	current, size := utf8.DecodeRuneInString(first.Text())
+	if !isEntityBoundaryRune(current) {
+		return
+	}
+	s.writeNumericEntity(current)
+	s.skipText, s.skipByte = firstID, size
+}
+
 func (s *renderState) hasDuplicateRecoveredAncestor(node ast.Node) bool {
 	for parentID := node.Parent(); parentID != ast.NoNode; parentID = s.document.Node(parentID).Parent() {
 		parent := s.document.Node(parentID)
@@ -653,7 +686,7 @@ func (s *renderState) inlineContainer(id ast.NodeID, open, close string) error {
 	if !s.hasRenderableInlineContent(id) {
 		return nil
 	}
-	s.inlineStack = append(s.inlineStack, inlineFrame{kind: s.document.Node(id).Kind(), marker: open[0]})
+	s.inlineStack = append(s.inlineStack, inlineFrame{owner: id, kind: s.document.Node(id).Kind(), marker: open[0]})
 	defer func() { s.inlineStack = s.inlineStack[:len(s.inlineStack)-1] }()
 	s.stabilizeInlineOpeningBoundary(s.document.Node(id))
 	boundary := s.takeTrailingUnrepresentableControls()
@@ -669,27 +702,7 @@ func (s *renderState) inlineContainer(id ast.NodeID, open, close string) error {
 }
 
 func (s *renderState) stabilizeInlineOpeningBoundary(node ast.Node) {
-	firstID := node.FirstChild()
-	if firstID == ast.NoNode {
-		return
-	}
-	first := s.document.Node(firstID)
-	for (first.Kind() == ast.Emphasis || first.Kind() == ast.Strong) && s.hasDuplicateRecoveredAncestor(first) {
-		firstID = first.FirstChild()
-		if firstID == ast.NoNode {
-			return
-		}
-		first = s.document.Node(firstID)
-	}
-	needsProtection := isFormattingKind(first.Kind())
-	if needsProtection && len(s.inlineStack) != 0 {
-		childMarker := s.effectiveInlineDelimiterMarker(first)
-		needsProtection = childMarker[0] != s.inlineStack[len(s.inlineStack)-1].marker
-	}
-	if first.Kind() == ast.Text {
-		needsProtection = utf8.RuneCountInString(first.Text()) == 1 && s.needsTrailingEntity(first, first.Text())
-	}
-	if !needsProtection {
+	if len(s.inlineStack) == 0 || !s.inlineOpeningNeedsProtection(node, s.inlineStack[len(s.inlineStack)-1].marker) {
 		return
 	}
 	output := s.output.String()
@@ -700,6 +713,30 @@ func (s *renderState) stabilizeInlineOpeningBoundary(node ast.Node) {
 	s.output.Reset()
 	s.output.WriteString(output[:len(output)-size])
 	s.writeNumericEntity(previous)
+}
+
+func (s *renderState) inlineOpeningNeedsProtection(node ast.Node, marker byte) bool {
+	firstID := node.FirstChild()
+	if firstID == ast.NoNode {
+		return false
+	}
+	first := s.document.Node(firstID)
+	for (first.Kind() == ast.Emphasis || first.Kind() == ast.Strong) && s.hasDuplicateRecoveredAncestor(first) {
+		firstID = first.FirstChild()
+		if firstID == ast.NoNode {
+			return false
+		}
+		first = s.document.Node(firstID)
+	}
+	needsProtection := isFormattingKind(first.Kind())
+	if needsProtection {
+		childMarker := s.effectiveInlineDelimiterMarker(first)
+		needsProtection = childMarker[0] != marker || marker == '_'
+	}
+	if first.Kind() == ast.Text {
+		needsProtection = utf8.RuneCountInString(first.Text()) == 1 && s.needsTrailingEntity(first, first.Text())
+	}
+	return needsProtection
 }
 
 func (s *renderState) takeTrailingUnrepresentableControls() string {
@@ -824,7 +861,7 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 		onlyChild := astParent.FirstChild() == node.ID() && astParent.LastChild() == node.ID()
 		switch {
 		case node.Kind() == ast.Strong && parent.kind == ast.Emphasis:
-			combine := onlyChild && (!parent.merged || !parent.hasPreceding && !parent.hasFollowing) && !s.hasEmphasisDescendant(node)
+			combine := onlyChild && !parent.hasPreceding && !parent.hasFollowing
 			if combine {
 				marker = string(parent.marker)
 			} else if marker[0] == parent.marker {
@@ -884,7 +921,7 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 			parentID := node.Parent()
 			if parentID != ast.NoNode {
 				parent := s.document.Node(parentID)
-				if isEmphasisKind(parent.Kind()) && s.previousFormattingSibling(node) == ast.NoNode && (parent.Flags()&ast.InlineRecoveredDelimiter == 0 || node.Flags()&ast.InlineRecoveredDelimiter != 0 || s.onlyChildAfterMovingControls(node)) {
+				if isEmphasisKind(parent.Kind()) && s.previousFormattingSibling(node) == ast.NoNode && s.canReuseParentMarkerAcrossControls(node) && (node.Flags()&ast.InlineRecoveredDelimiter != 0 || s.onlyChildAfterMovingControls(node)) {
 					parentMarker := s.effectiveInlineDelimiterMarker(parent)
 					if len(s.inlineStack) != 0 && s.inlineStack[len(s.inlineStack)-1].kind == parent.Kind() {
 						parentMarker = string(s.inlineStack[len(s.inlineStack)-1].marker)
@@ -896,7 +933,7 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 			}
 		}
 		previous, _ := utf8.DecodeLastRuneInString(output[:boundary])
-		if marker == "_" && !unicode.IsSpace(previous) && !unicode.IsPunct(previous) && !unicode.IsSymbol(previous) {
+		if marker == "_" && !unicode.IsSpace(previous) && !unicode.IsPunct(previous) && !unicode.IsSymbol(previous) && !s.inlineOpeningNeedsProtection(node, marker[0]) {
 			// Underscores cannot open inside a word-like boundary. Controls that
 			// cannot round-trip through a character reference and ordinary word
 			// runes must stay literal; an asterisk is valid at either boundary.
@@ -904,6 +941,17 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 		}
 	}
 	return strings.Repeat(marker, length)
+}
+
+func (s *renderState) canReuseParentMarkerAcrossControls(node ast.Node) bool {
+	if len(s.inlineStack) == 0 {
+		return true
+	}
+	parent := s.inlineStack[len(s.inlineStack)-1]
+	if parent.hasFollowing {
+		return false
+	}
+	return !parent.hasPreceding || s.onlyChildAfterMovingControls(node)
 }
 
 func (s *renderState) followedByUnrepresentableControl(node ast.Node) bool {
@@ -1143,7 +1191,31 @@ func (s *renderState) needsLeadingEntity(node ast.Node, text string) bool {
 	if !isEntityBoundaryRune(first) {
 		return false
 	}
+	if (previous.Kind() == ast.Emphasis || previous.Kind() == ast.Strong) && s.hasDuplicateRecoveredAncestor(previous) && !s.collapsedFormattingEndsWithDelimiter(previous) {
+		return false
+	}
 	return previous.Kind() == ast.Emphasis || previous.Kind() == ast.Strong || previous.Kind() == ast.Strikethrough
+}
+
+func (s *renderState) collapsedFormattingEndsWithDelimiter(node ast.Node) bool {
+	for childID := node.LastChild(); childID != ast.NoNode; childID = s.document.Node(childID).PreviousSibling() {
+		child := s.document.Node(childID)
+		if child.Kind() == ast.Text {
+			if child.Text() != "" {
+				return false
+			}
+			continue
+		}
+		if isFormattingKind(child.Kind()) {
+			if ((child.Kind() == ast.Emphasis || child.Kind() == ast.Strong) && s.hasDuplicateRecoveredAncestor(child)) ||
+				(child.Kind() == ast.Strikethrough && s.hasStrikethroughAncestor(child)) {
+				return s.collapsedFormattingEndsWithDelimiter(child)
+			}
+			return s.hasRenderableInlineContent(childID)
+		}
+		return false
+	}
+	return false
 }
 
 func (s *renderState) needsTrailingEntity(node ast.Node, text string) bool {
@@ -1155,6 +1227,9 @@ func (s *renderState) needsTrailingEntity(node ast.Node, text string) bool {
 		return false
 	}
 	next := s.document.Node(node.NextSibling())
+	if (next.Kind() == ast.Emphasis || next.Kind() == ast.Strong) && s.hasDuplicateRecoveredAncestor(next) {
+		return false
+	}
 	if isFormattingKind(next.Kind()) && s.startsWithUnrepresentableControl(next) && !s.asteriskFallbackViolatesRuleOfThree(next) {
 		return false
 	}
