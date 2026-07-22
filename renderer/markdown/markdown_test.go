@@ -236,6 +236,15 @@ func TestLeadingControlMoveProtectsOuterFormattingOpener(t *testing.T) {
 	}
 }
 
+func TestAdjustedParentMarkerProtectsOuterFormattingOpener(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "\x000***0**0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "\x00&#48;*__0__&#48;*\n" || second != first {
+		t.Fatalf("adjusted parent marker opener: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredNestedRunUsesRenderedParentMarker(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "*\x00****0")
@@ -668,6 +677,15 @@ func TestCollapsedRecoveredSiblingDoesNotAddEntityBoundary(t *testing.T) {
 	second := normalize(t, profile.EnhanceMarkV1, first)
 	if first != "_00_\n" || second != first {
 		t.Fatalf("collapsed sibling entity boundary: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedMemberCollapsedFormattingKeepsDelimiterBoundary(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0*_*0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*__0__&#48;*\n" || second != first {
+		t.Fatalf("merged collapsed-member boundary: first=%q second=%q", first, second)
 	}
 }
 

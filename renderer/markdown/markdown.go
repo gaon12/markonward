@@ -324,7 +324,7 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 			delimiter = strings.Repeat(string(parentFrame.marker), length)
 		}
 	}
-	s.stabilizeFormattingGroupOpeningBoundary(first, last)
+	s.stabilizeFormattingGroupOpeningBoundary(first, last, delimiter[0])
 	boundary := s.takeTrailingUnrepresentableControls()
 	s.output.WriteString(delimiter)
 	s.output.WriteString(boundary)
@@ -428,13 +428,23 @@ func (s *renderState) formattingGroupHasEmphasisDescendant(first, last ast.NodeI
 	}
 }
 
-func (s *renderState) stabilizeFormattingGroupOpeningBoundary(first, last ast.NodeID) {
+func (s *renderState) stabilizeFormattingGroupOpeningBoundary(first, last ast.NodeID, marker byte) {
 	firstNode := s.document.Node(first)
 	contentID := firstNode.FirstChild()
 	if contentID == ast.NoNode || contentID != firstNode.LastChild() {
 		return
 	}
 	content := s.document.Node(contentID)
+	if isEmphasisKind(firstNode.Kind()) && isEmphasisKind(content.Kind()) {
+		childMarker := s.effectiveInlineDelimiterMarker(content)
+		if childMarker[0] == marker {
+			childMarker = alternateInlineDelimiterMarker(childMarker)
+		}
+		if childMarker[0] != marker || marker == '_' {
+			s.protectTrailingOutputRune()
+		}
+		return
+	}
 	if content.Kind() != ast.Text || utf8.RuneCountInString(content.Text()) != 1 {
 		return
 	}
@@ -442,6 +452,10 @@ func (s *renderState) stabilizeFormattingGroupOpeningBoundary(first, last ast.No
 	if !isEntityBoundaryRune(leading) || !s.laterFormattingGroupMemberNeedsEntity(first, last) {
 		return
 	}
+	s.protectTrailingOutputRune()
+}
+
+func (s *renderState) protectTrailingOutputRune() {
 	output := s.output.String()
 	previous, size := utf8.DecodeLastRuneInString(output)
 	if !isEntityBoundaryRune(previous) {
@@ -479,6 +493,7 @@ func (s *renderState) prepareFormattingGroupMember(node ast.Node) {
 	}
 	first := s.document.Node(firstID)
 	if (first.Kind() == ast.Emphasis || first.Kind() == ast.Strong) && s.hasDuplicateRecoveredLayer(first) {
+		s.prepareCollapsedFormattingGroupMember(first)
 		return
 	}
 	if isFormattingKind(first.Kind()) && !s.startsWithWordLikeText(first) {
@@ -503,6 +518,25 @@ func (s *renderState) prepareFormattingGroupMember(node ast.Node) {
 	}
 	s.writeNumericEntity(current)
 	s.skipText, s.skipByte = firstID, size
+}
+
+func (s *renderState) prepareCollapsedFormattingGroupMember(node ast.Node) {
+	for (node.Kind() == ast.Emphasis || node.Kind() == ast.Strong) && s.hasDuplicateRecoveredLayer(node) {
+		childID := node.FirstChild()
+		if childID == ast.NoNode {
+			return
+		}
+		node = s.document.Node(childID)
+	}
+	if node.Kind() != ast.Text || node.Text() == "" || !endsWithUnescapedFormattingDelimiter(s.output.String()) {
+		return
+	}
+	current, size := utf8.DecodeRuneInString(node.Text())
+	if !isEntityBoundaryRune(current) {
+		return
+	}
+	s.writeNumericEntity(current)
+	s.skipText, s.skipByte = node.ID(), size
 }
 
 func endsWithUnescapedFormattingDelimiter(output string) bool {
@@ -747,6 +781,19 @@ func (s *renderState) inlineOpeningNeedsProtection(node ast.Node, marker byte) b
 	needsProtection := isFormattingKind(first.Kind())
 	if needsProtection {
 		childMarker := s.effectiveInlineDelimiterMarker(first)
+		if isEmphasisKind(node.Kind()) && isEmphasisKind(first.Kind()) {
+			onlyChild := node.FirstChild() == first.ID() && node.LastChild() == first.ID()
+			switch {
+			case first.Kind() == ast.Strong && node.Kind() == ast.Emphasis:
+				if onlyChild && !s.hasEmphasisDescendant(first) {
+					childMarker = string(marker)
+				} else if childMarker[0] == marker {
+					childMarker = alternateInlineDelimiterMarker(childMarker)
+				}
+			case first.Kind() == ast.Emphasis && childMarker[0] == marker:
+				childMarker = alternateInlineDelimiterMarker(childMarker)
+			}
+		}
 		if movedControls && isEmphasisKind(node.Kind()) && isEmphasisKind(first.Kind()) && s.onlyChildAfterMovingControls(first) && !s.parentHasFollowingFormattingPeer(first) {
 			childMarker = string(marker)
 		}
