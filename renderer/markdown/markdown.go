@@ -1221,6 +1221,19 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 			if marker[0] == parent.marker && !reuseMergedMarker {
 				marker = alternateInlineDelimiterMarker(marker)
 			}
+			// Two delimiter characters cannot alternate indefinitely. If the
+			// selected marker would match a non-immediate emphasis ancestor, use
+			// the parent's marker and turn the preceding word rune into a numeric
+			// reference. Its trailing semicolon makes this delimiter opener-only,
+			// so it cannot prematurely close the parent.
+			for index := len(s.inlineStack) - 2; index >= 0; index-- {
+				ancestor := s.inlineStack[index]
+				if ancestor.kind == ast.Emphasis && ancestor.marker == marker[0] {
+					marker = string(parent.marker)
+					s.protectTrailingOutputRune()
+					break
+				}
+			}
 			adjustedForParent = true
 		case node.Kind() == ast.Emphasis && marker[0] == parent.marker && !onlyChild:
 			marker = alternateInlineDelimiterMarker(marker)

@@ -704,6 +704,15 @@ func TestMergedFormattingGroupSharesSplitTextNestedLayer(t *testing.T) {
 	}
 }
 
+func TestDeepNestedEmphasisProtectsDistantAncestorMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**0*0*0*!0*000")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*_&#48;_0_&#48;_\\!0*&#48;00\n" || second != first {
+		t.Fatalf("deep nested emphasis marker boundary: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")
