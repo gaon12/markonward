@@ -749,6 +749,15 @@ func TestLinkDestinationWhitespaceUsesNumericReference(t *testing.T) {
 	}
 }
 
+func TestLinkDestinationOpeningParenthesisIsEscaped(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "[](\\()")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "[](\\()\n" || second != first {
+		t.Fatalf("link destination opening parenthesis: first=%q second=%q", first, second)
+	}
+}
+
 func TestOnlyChildDeepEmphasisCombinesOneMarkerRun(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_*_0_*_")

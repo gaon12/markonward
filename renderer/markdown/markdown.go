@@ -2019,7 +2019,7 @@ func escapeDestination(value string) string {
 	output.Grow(len(value))
 	for _, current := range value {
 		switch {
-		case current == '\\' || current == ')':
+		case current == '\\' || current == '(' || current == ')':
 			output.WriteByte('\\')
 			output.WriteRune(current)
 		case unicode.IsSpace(current) && numericEntityRoundTrips(current):
