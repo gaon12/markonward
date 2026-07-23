@@ -695,6 +695,15 @@ func TestCollapsedFormattingUsesRenderedWhitespaceEdge(t *testing.T) {
 	}
 }
 
+func TestMergedFormattingGroupSharesSplitTextNestedLayer(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0******!!0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***0\\!\\!0***\n" || second != first {
+		t.Fatalf("merged group with split nested text: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")

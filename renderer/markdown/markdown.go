@@ -566,8 +566,7 @@ func (s *renderState) simpleOppositeFormattingChild(node ast.Node, outerKind ast
 		if child.Kind() == ast.Text {
 			continue
 		}
-		textID := child.FirstChild()
-		if found != ast.NoNode || !isEmphasisKind(child.Kind()) || child.Kind() == outerKind || textID == ast.NoNode || textID != child.LastChild() || s.document.Node(textID).Kind() != ast.Text {
+		if found != ast.NoNode || !isEmphasisKind(child.Kind()) || child.Kind() == outerKind || !s.hasOnlyTextChildren(child) {
 			return ast.NoNode, ast.Invalid, false
 		}
 		found, foundKind = childID, child.Kind()
