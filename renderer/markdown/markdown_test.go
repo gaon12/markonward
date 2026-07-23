@@ -623,6 +623,15 @@ func TestMergedStrongGroupCombinesWithParentAroundNestedEmphasis(t *testing.T) {
 	}
 }
 
+func TestControlOnlyMergedMemberMovesInsideNestedDelimiter(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*!*0**_\x00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*\\!_0\x00_*\n" || second != first {
+		t.Fatalf("control-only merged member after nested emphasis: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")

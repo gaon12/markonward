@@ -77,13 +77,14 @@ type renderState struct {
 }
 
 type inlineFrame struct {
-	owner            ast.NodeID
-	kind             ast.Kind
-	marker           byte
-	merged           bool
-	hasPreceding     bool
-	hasFollowing     bool
-	followingControl bool
+	owner                 ast.NodeID
+	kind                  ast.Kind
+	marker                byte
+	merged                bool
+	hasPreceding          bool
+	hasFollowing          bool
+	followingControl      bool
+	followingControlMoved bool
 }
 
 func newRenderState(renderer *Renderer, ctx context.Context, document *ast.Document) renderState {
@@ -414,6 +415,7 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 		s.inlineStack[len(s.inlineStack)-1].hasPreceding = current != first
 		s.inlineStack[len(s.inlineStack)-1].hasFollowing = current != last && !s.formattingGroupRemainderOnlyControls(current, last)
 		s.inlineStack[len(s.inlineStack)-1].followingControl = current != last && s.startsWithUnrepresentableControl(s.document.Node(currentNode.NextSibling()))
+		s.inlineStack[len(s.inlineStack)-1].followingControlMoved = current != last && isFormattingKind(s.document.Node(currentNode.NextSibling()).Kind()) && s.onlyUnrepresentableControlContent(currentNode.NextSibling())
 		if current != first && isFormattingKind(currentNode.Kind()) && s.onlyUnrepresentableControlContent(current) {
 			previous := s.document.Node(current).PreviousSibling()
 			for previous != ast.NoNode && !isFormattingKind(s.document.Node(previous).Kind()) {
@@ -1188,7 +1190,11 @@ func (s *renderState) followedByUnrepresentableControl(node ast.Node) bool {
 	if next := node.NextSibling(); next != ast.NoNode && s.startsWithUnrepresentableControl(s.document.Node(next)) {
 		return true
 	}
-	if len(s.inlineStack) == 0 || !s.inlineStack[len(s.inlineStack)-1].followingControl {
+	if len(s.inlineStack) == 0 {
+		return false
+	}
+	frame := s.inlineStack[len(s.inlineStack)-1]
+	if !frame.followingControl || frame.followingControlMoved {
 		return false
 	}
 	// The merged group's next member is relevant only to formatting at the
