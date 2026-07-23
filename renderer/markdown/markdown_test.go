@@ -578,6 +578,15 @@ func TestMergedEmphasisGroupCombinesWithStrongParent(t *testing.T) {
 	}
 }
 
+func TestMergedStrongGroupCombinesAcrossTrailingControl(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*__0__**0**\x00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***00**\x00*\n" || second != first {
+		t.Fatalf("merged strong group before trailing control: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")

@@ -386,7 +386,7 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 	if len(s.inlineStack) != 0 {
 		parentFrame := s.inlineStack[len(s.inlineStack)-1]
 		parent := s.document.Node(firstNode.Parent())
-		coversParent := parent.FirstChild() == first && parent.LastChild() == last
+		coversParent := s.formattingGroupCoversParent(parent, first, last)
 		if firstNode.Kind() == ast.Strong && parentFrame.kind == ast.Emphasis && coversParent && !s.formattingGroupHasEmphasisDescendant(first, last) {
 			delimiter = strings.Repeat(string(parentFrame.marker), length)
 		}
@@ -438,6 +438,27 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 	s.stabilizeClosingBoundary(s.document.Node(last), rune(delimiter[0]))
 	s.output.WriteString(delimiter)
 	return nil
+}
+
+func (s *renderState) formattingGroupCoversParent(parent ast.Node, first, last ast.NodeID) bool {
+	if parent.FirstChild() != first {
+		return false
+	}
+	// Controls that Markdown cannot escape remain direct children after the
+	// formatting group. They do not prevent the group from sharing its opening
+	// marker with the parent, but the group still closes before those controls
+	// so a subsequent parse preserves the original nesting.
+	for current := last; current != parent.LastChild(); {
+		current = s.document.Node(current).NextSibling()
+		if current == ast.NoNode {
+			return false
+		}
+		node := s.document.Node(current)
+		if node.Kind() != ast.Text || !onlyUnrepresentableControls(node.Text()) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *renderState) formattingGroupRemainderOnlyControls(current, last ast.NodeID) bool {
