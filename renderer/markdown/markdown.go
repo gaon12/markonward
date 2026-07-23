@@ -77,14 +77,13 @@ type renderState struct {
 }
 
 type inlineFrame struct {
-	owner                 ast.NodeID
-	kind                  ast.Kind
-	marker                byte
-	merged                bool
-	hasPreceding          bool
-	hasFollowing          bool
-	followingControl      bool
-	followingControlMoved bool
+	owner                         ast.NodeID
+	kind                          ast.Kind
+	marker                        byte
+	merged                        bool
+	hasPreceding                  bool
+	hasFollowing                  bool
+	followingControlNeedsAsterisk bool
 }
 
 func newRenderState(renderer *Renderer, ctx context.Context, document *ast.Document) renderState {
@@ -176,9 +175,16 @@ func (s *renderState) block(id ast.NodeID) error { //nolint:gocyclo // The switc
 	case ast.ThematicBreak:
 		s.output.WriteString("---\n\n")
 	case ast.CodeBlock:
-		fence := strings.Repeat("`", maxInt(3, longestRun(node.Text(), '`')+1))
+		marker := byte('`')
+		info := strings.TrimSpace(node.Title())
+		if strings.ContainsRune(info, '`') {
+			// CommonMark forbids backticks in the info string of a backtick
+			// fence. A tilde fence preserves the same language metadata.
+			marker = '~'
+		}
+		fence := strings.Repeat(string(marker), maxInt(3, longestRun(node.Text(), marker)+1))
 		s.output.WriteString(fence)
-		if info := strings.TrimSpace(node.Title()); info != "" {
+		if info != "" {
 			s.output.WriteString(info)
 		}
 		s.output.WriteByte('\n')
@@ -427,9 +433,15 @@ func (s *renderState) inlineSimpleFactoredFormatting(first, last, nested ast.Nod
 	if err := s.inlines(first); err != nil {
 		return err
 	}
-	strongDelimiter := strings.Repeat(string(delimiter[0]), 2)
+	strongMarker := delimiter[0]
+	firstText := s.document.Node(s.document.Node(first).FirstChild()).Text()
+	trailing, _ := utf8.DecodeLastRuneInString(firstText)
+	if delimiter[0] == '_' || unicode.IsPunct(trailing) || unicode.IsSymbol(trailing) {
+		strongMarker = alternateInlineDelimiterMarker(string(strongMarker))[0]
+	}
+	strongDelimiter := strings.Repeat(string(strongMarker), 2)
 	s.output.WriteString(strongDelimiter)
-	s.inlineStack = append(s.inlineStack, inlineFrame{owner: ast.NoNode, kind: ast.Strong, marker: delimiter[0], merged: true})
+	s.inlineStack = append(s.inlineStack, inlineFrame{owner: ast.NoNode, kind: ast.Strong, marker: strongMarker, merged: true})
 	err := s.inlines(nested)
 	s.inlineStack = s.inlineStack[:len(s.inlineStack)-1]
 	if err != nil {
@@ -476,7 +488,7 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 		parentFrame := s.inlineStack[len(s.inlineStack)-1]
 		parent := s.document.Node(firstNode.Parent())
 		coversParent := s.formattingGroupCoversParent(parent, first, last)
-		if firstNode.Kind() == ast.Strong && parentFrame.kind == ast.Emphasis && coversParent {
+		if firstNode.Kind() == ast.Strong && parentFrame.kind == ast.Emphasis && coversParent && (!parentFrame.merged || !parentFrame.hasPreceding && !parentFrame.hasFollowing) {
 			delimiter = strings.Repeat(string(parentFrame.marker), length)
 		}
 		if firstNode.Kind() == ast.Emphasis && parentFrame.kind == ast.Strong && coversParent && !s.formattingGroupHasEmphasisDescendant(first, last) {
@@ -485,6 +497,7 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 	}
 	s.stabilizeFormattingGroupOpeningBoundary(first, last, delimiter[0])
 	boundary := s.takeTrailingUnrepresentableControls()
+	openingStart := s.output.Len()
 	s.output.WriteString(delimiter)
 	s.output.WriteString(boundary)
 	s.prefixedInline[first] = boundary != ""
@@ -494,6 +507,7 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 		if err := s.inlineSharedFormattingChildren(first, last, firstNested, lastNested, childKind, delimiter[0]); err != nil {
 			return err
 		}
+		s.stabilizeRenderedOpeningBoundary(openingStart, len(delimiter), rune(delimiter[0]))
 		s.stabilizeClosingBoundary(s.document.Node(last), rune(delimiter[0]))
 		s.output.WriteString(delimiter)
 		return nil
@@ -502,8 +516,7 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 		currentNode := s.document.Node(current)
 		s.inlineStack[len(s.inlineStack)-1].hasPreceding = current != first
 		s.inlineStack[len(s.inlineStack)-1].hasFollowing = current != last && !s.formattingGroupRemainderOnlyControls(current, last)
-		s.inlineStack[len(s.inlineStack)-1].followingControl = current != last && s.startsWithUnrepresentableControl(s.document.Node(currentNode.NextSibling()))
-		s.inlineStack[len(s.inlineStack)-1].followingControlMoved = current != last && isFormattingKind(s.document.Node(currentNode.NextSibling()).Kind()) && s.onlyUnrepresentableControlContent(currentNode.NextSibling())
+		s.inlineStack[len(s.inlineStack)-1].followingControlNeedsAsterisk = current != last && s.formattingGroupFollowingControlNeedsAsterisk(current, last, firstNode.Kind())
 		if current != first && isFormattingKind(currentNode.Kind()) && s.onlyUnrepresentableControlContent(current) {
 			previous := s.document.Node(current).PreviousSibling()
 			for previous != ast.NoNode && !isFormattingKind(s.document.Node(previous).Kind()) {
@@ -533,9 +546,49 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 			break
 		}
 	}
+	s.stabilizeRenderedOpeningBoundary(openingStart, len(delimiter), rune(delimiter[0]))
 	s.stabilizeClosingBoundary(s.document.Node(last), rune(delimiter[0]))
 	s.output.WriteString(delimiter)
 	return nil
+}
+
+func (s *renderState) formattingGroupFollowingControlNeedsAsterisk(current, last ast.NodeID, transparentKind ast.Kind) bool {
+	controlCount := 0
+	var scan func(ast.Node) (bool, bool)
+	scan = func(node ast.Node) (bool, bool) {
+		if node.Kind() == ast.Text {
+			for _, currentRune := range node.Text() {
+				if unicode.IsControl(currentRune) && !numericEntityRoundTrips(currentRune) {
+					controlCount++
+					continue
+				}
+				if controlCount == 0 {
+					return true, false
+				}
+				wordLike := !unicode.IsSpace(currentRune) && !unicode.IsPunct(currentRune) && !unicode.IsSymbol(currentRune)
+				return true, wordLike
+			}
+			return false, false
+		}
+		if node.Kind() != transparentKind && !s.isCollapsedFormatting(node) {
+			return true, false
+		}
+		for childID := node.FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+			if done, needsAsterisk := scan(s.document.Node(childID)); done {
+				return true, needsAsterisk
+			}
+		}
+		return false, false
+	}
+	for nextID := s.document.Node(current).NextSibling(); nextID != ast.NoNode; nextID = s.document.Node(nextID).NextSibling() {
+		if done, needsAsterisk := scan(s.document.Node(nextID)); done {
+			return needsAsterisk
+		}
+		if nextID == last {
+			break
+		}
+	}
+	return controlCount >= 2
 }
 
 func (s *renderState) sharedSimpleFormattingChildKind(first, last ast.NodeID) (ast.Kind, ast.NodeID, ast.NodeID, bool) {
@@ -599,12 +652,28 @@ func (s *renderState) simpleOppositeFormattingChild(node ast.Node, outerKind ast
 		if child.Kind() == ast.Text {
 			continue
 		}
-		if found != ast.NoNode || !isEmphasisKind(child.Kind()) || child.Kind() == outerKind || !s.hasOnlyTextChildren(child) {
+		if found != ast.NoNode || !isEmphasisKind(child.Kind()) || child.Kind() == outerKind || !s.hasOnlyRenderedTextChildren(child) {
 			return ast.NoNode, ast.Invalid, false
 		}
 		found, foundKind = childID, child.Kind()
 	}
 	return found, foundKind, found != ast.NoNode
+}
+
+func (s *renderState) hasOnlyRenderedTextChildren(node ast.Node) bool {
+	if node.FirstChild() == ast.NoNode {
+		return false
+	}
+	for childID := node.FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		child := s.document.Node(childID)
+		if child.Kind() == ast.Text {
+			continue
+		}
+		if !s.isCollapsedFormatting(child) || !s.hasOnlyRenderedTextChildren(child) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *renderState) inlineSharedFormattingChildren(first, last, firstNested, lastNested ast.NodeID, kind ast.Kind, marker byte) error {
@@ -753,7 +822,14 @@ func (s *renderState) formattingGroupHasEmphasisDescendant(first, last ast.NodeI
 func (s *renderState) stabilizeFormattingGroupOpeningBoundary(first, last ast.NodeID, marker byte) {
 	firstNode := s.document.Node(first)
 	contentID := firstNode.FirstChild()
-	if contentID == ast.NoNode || contentID != firstNode.LastChild() {
+	for contentID != ast.NoNode && contentID != firstNode.LastChild() {
+		content := s.document.Node(contentID)
+		if content.Kind() != ast.Text || !onlyUnrepresentableControls(content.Text()) {
+			return
+		}
+		contentID = content.NextSibling()
+	}
+	if contentID == ast.NoNode {
 		return
 	}
 	content := s.document.Node(contentID)
@@ -886,6 +962,9 @@ func (s *renderState) inline(id ast.NodeID) error { //nolint:gocyclo // The swit
 		return err
 	}
 	node := s.document.Node(id)
+	if isEmphasisKind(node.Kind()) && s.needsHTMLFormattingFallback(node) {
+		return s.inlineFormattingHTML(id)
+	}
 	switch node.Kind() {
 	case ast.Text:
 		text := node.Text()
@@ -982,7 +1061,12 @@ func (s *renderState) inline(id ast.NodeID) error { //nolint:gocyclo // The swit
 			break
 		}
 		if s.renderer.profile.Has(profile.ExtendedAutolinks) && strings.ContainsAny(node.Destination(), "<>") {
-			s.output.WriteString(node.Destination())
+			if s.autolinkNeedsExplicitSyntax(node) {
+				display := strings.TrimPrefix(node.Destination(), "mailto:")
+				s.output.WriteString("[" + escapeText(display) + "](" + escapeDestination(node.Destination()) + ")")
+			} else {
+				s.output.WriteString(node.Destination())
+			}
 			break
 		}
 		s.output.WriteByte('<')
@@ -1008,12 +1092,38 @@ func (s *renderState) inline(id ast.NodeID) error { //nolint:gocyclo // The swit
 	return nil
 }
 
+func (s *renderState) autolinkNeedsExplicitSyntax(node ast.Node) bool {
+	runes := 0
+	for nextID := node.NextSibling(); nextID != ast.NoNode; nextID = s.document.Node(nextID).NextSibling() {
+		next := s.document.Node(nextID)
+		if next.Kind() != ast.Text {
+			break
+		}
+		runes += utf8.RuneCountInString(next.Text())
+		if runes > 1 {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *renderState) singleTildeOpeningRangeConflict(node ast.Node) bool {
 	output := s.output.String()
 	if output == "" || !s.startsWithWordLikeText(node) {
 		return false
 	}
-	previous, _ := utf8.DecodeLastRuneInString(output)
+	boundary := len(output)
+	for boundary > 0 {
+		current, size := utf8.DecodeLastRuneInString(output[:boundary])
+		if !unicode.IsControl(current) || numericEntityRoundTrips(current) {
+			break
+		}
+		boundary -= size
+	}
+	if boundary == 0 {
+		return false
+	}
+	previous, _ := utf8.DecodeLastRuneInString(output[:boundary])
 	return unicode.IsLetter(previous) || unicode.IsNumber(previous)
 }
 
@@ -1074,15 +1184,75 @@ func (s *renderState) inlineContainer(id ast.NodeID, open, close string) error {
 	defer func() { s.inlineStack = s.inlineStack[:len(s.inlineStack)-1] }()
 	s.stabilizeInlineOpeningBoundary(s.document.Node(id))
 	boundary := s.takeTrailingUnrepresentableControls()
+	openingStart := s.output.Len()
 	s.output.WriteString(open)
 	s.output.WriteString(boundary)
 	s.prefixedInline[id] = boundary != ""
 	if err := s.inlines(id); err != nil {
 		return err
 	}
+	s.stabilizeRenderedOpeningBoundary(openingStart, len(open), rune(open[0]))
 	s.stabilizeClosingBoundary(s.document.Node(id), rune(close[0]))
 	s.output.WriteString(close)
 	return nil
+}
+
+func (s *renderState) stabilizeRenderedOpeningBoundary(openingStart, openingLength int, marker rune) {
+	output := s.output.String()
+	contentStart := openingStart + openingLength
+	for contentStart < len(output) && rune(output[contentStart]) == marker {
+		contentStart++
+	}
+	if contentStart >= len(output) {
+		return
+	}
+	previous, size := rune(' '), 0
+	if openingStart != 0 {
+		previous, size = utf8.DecodeLastRuneInString(output[:openingStart])
+	}
+	next, nextSize := utf8.DecodeRuneInString(output[contentStart:])
+	if unicode.IsSpace(next) && numericEntityRoundTrips(next) {
+		s.output.Reset()
+		s.output.WriteString(output[:contentStart])
+		s.writeNumericEntity(next)
+		s.output.WriteString(output[contentStart+nextSize:])
+		return
+	}
+	if unicode.IsControl(next) && !numericEntityRoundTrips(next) {
+		if decoded, entityStart, ok := trailingNumericEntity(output[:openingStart]); ok && delimiterCanOpen(marker, decoded, next) {
+			s.output.Reset()
+			s.output.WriteString(output[:entityStart])
+			s.output.WriteRune(decoded)
+			s.output.WriteString(output[openingStart:])
+			return
+		}
+	}
+	if openingStart == 0 || delimiterCanOpen(marker, previous, next) || !isEntityBoundaryRune(previous) {
+		return
+	}
+	s.output.Reset()
+	s.output.WriteString(output[:openingStart-size])
+	s.writeNumericEntity(previous)
+	s.output.WriteString(output[openingStart:])
+}
+
+func trailingNumericEntity(value string) (rune, int, bool) {
+	if !strings.HasSuffix(value, ";") {
+		return 0, 0, false
+	}
+	start := strings.LastIndex(value, "&#")
+	if start < 0 || start+3 >= len(value) {
+		return 0, 0, false
+	}
+	code, err := strconv.Atoi(value[start+2 : len(value)-1])
+	if err != nil || code < 0 || code > utf8.MaxRune {
+		return 0, 0, false
+	}
+	decoded := rune(code)
+	if !numericEntityRoundTrips(decoded) {
+		return 0, 0, false
+	}
+	return decoded, start, true
 }
 
 func (s *renderState) stabilizeInlineOpeningBoundary(node ast.Node) {
@@ -1277,14 +1447,19 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 			// from the AST parent used by effectiveInlineDelimiterMarker. Combine
 			// an only-child run with the actual parent marker; otherwise separate
 			// a partial nested range by alternating that marker.
-			if onlyChild {
+			if onlyChild || s.renderedParentPrecedingOnlyControls(node) && s.renderedParentFollowingOnlyControls(node) {
 				marker = string(parent.marker)
 			} else if marker[0] == parent.marker {
 				marker = alternateInlineDelimiterMarker(marker)
 			}
 		case node.Kind() == ast.Strong && parent.kind == ast.Emphasis:
-			onlyChildAfterControls := !onlyChild && s.onlyChildAfterMovingControls(node)
-			combine := (onlyChild && !parent.hasPreceding || onlyChildAfterControls) && !parent.hasFollowing
+			precedingOnlyControls := s.renderedParentPrecedingOnlyControls(node)
+			followingOnlyControls := s.renderedParentFollowingOnlyControls(node)
+			combine := onlyChild && !parent.hasPreceding && (!parent.hasFollowing || followingOnlyControls) ||
+				!onlyChild && precedingOnlyControls && followingOnlyControls
+			if parent.merged && s.mergedFrameHasSemanticPreceding(node, parent.kind) && s.startsWithUnrepresentableControl(node) {
+				combine = false
+			}
 			if combine {
 				marker = string(parent.marker)
 			} else if marker[0] == parent.marker {
@@ -1312,13 +1487,31 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 				}
 			}
 			adjustedForParent = true
+		case node.Kind() == ast.Emphasis && parent.kind == ast.Strong && !onlyChild && s.renderedParentPrecedingOnlyControls(node) && s.renderedParentFollowingOnlyControls(node) && !s.hasFormattingPeer(astParent):
+			marker = string(parent.marker)
+			adjustedForParent = true
+		case node.Kind() == ast.Emphasis && parent.kind == ast.Strong && onlyChild && s.hasOnlyChildEmphasisChain(node):
+			// A pure emphasis chain can share the strong parent's rendered marker
+			// as one delimiter run. Alternating the entire chain creates adjacent
+			// runs that the next parse canonically combines anyway.
+			marker = string(parent.marker)
+			adjustedForParent = true
+		case node.Kind() == ast.Emphasis && parent.kind == ast.Strong && onlyChild && s.effectiveInlineDelimiterMarker(astParent)[0] != parent.marker:
+			// Marker selection for an AST ancestor can differ from the marker
+			// already emitted for the rendered strong parent. Its only emphasis
+			// child must combine with that actual marker to stay canonical.
+			marker = string(parent.marker)
+			if s.isCollapsedFormatting(astParent) && (parent.hasPreceding || parent.hasFollowing) {
+				marker = alternateInlineDelimiterMarker(marker)
+			}
+			adjustedForParent = true
 		case node.Kind() == ast.Emphasis && parent.kind == ast.Strong && node.FirstChild() != ast.NoNode && node.FirstChild() == node.LastChild() && s.document.Node(node.FirstChild()).Kind() == ast.Strong && s.effectiveInlineDelimiterMarker(astParent)[0] != parent.marker:
 			// A merged ancestor can force the strong parent away from its AST
 			// marker. Base the nested emphasis run on the marker that was actually
 			// emitted so the reconstructed direct-parent tree chooses the same run.
 			marker = string(parent.marker)
 			adjustedForParent = true
-		case node.Kind() == ast.Emphasis && marker[0] == parent.marker && !onlyChild:
+		case node.Kind() == ast.Emphasis && marker[0] == parent.marker && (!onlyChild || s.formattingAncestorsHaveFollowingFormattingPeer(node)):
 			marker = alternateInlineDelimiterMarker(marker)
 			adjustedForParent = true
 		}
@@ -1357,7 +1550,8 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 		}
 	}
 	lastChild := s.document.Node(node.LastChild())
-	if marker == "_" && s.followedByUnrepresentableControl(node) && s.previousFormattingSibling(node) == ast.NoNode && !isFormattingKind(lastChild.Kind()) {
+	lastChildEndsWithDelimiter := isFormattingKind(lastChild.Kind()) && (!s.isCollapsedFormatting(lastChild) || s.collapsedFormattingEndsWithDelimiter(lastChild))
+	if marker == "_" && s.followedByUnrepresentableControl(node) && s.previousFormattingSibling(node) == ast.NoNode && !lastChildEndsWithDelimiter {
 		marker = "*"
 	}
 	if marker == "_" {
@@ -1390,10 +1584,294 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 			// Underscores cannot open inside a word-like boundary. Controls that
 			// cannot round-trip through a character reference and ordinary word
 			// runes must stay literal; an asterisk is valid at either boundary.
-			marker = "*"
+			parentUsesAsterisk := len(s.inlineStack) != 0 && node.Kind() == ast.Emphasis && !s.startsWithWordLikeText(node) && s.inlineStack[len(s.inlineStack)-1].kind == ast.Strong && s.inlineStack[len(s.inlineStack)-1].marker == '*'
+			if parentUsesAsterisk && isEntityBoundaryRune(previous) {
+				// Matching the active parent would join two semantic layers into an
+				// ambiguous asterisk run. Keep the alternate marker and make its
+				// opening boundary valid without changing the decoded text.
+				s.protectTrailingOutputRune()
+			} else {
+				marker = "*"
+			}
 		}
 	}
 	return strings.Repeat(marker, length)
+}
+
+func (s *renderState) renderedParentFollowingOnlyControls(node ast.Node) bool {
+	if len(s.inlineStack) == 0 {
+		return false
+	}
+	owner := s.inlineStack[len(s.inlineStack)-1].owner
+	if owner == ast.NoNode {
+		return false
+	}
+	for branch := node.ID(); branch != ast.NoNode; {
+		for siblingID := s.document.Node(branch).NextSibling(); siblingID != ast.NoNode; siblingID = s.document.Node(siblingID).NextSibling() {
+			if !s.isOnlyUnrepresentableControlNode(siblingID) {
+				return false
+			}
+		}
+		parentID := s.document.Node(branch).Parent()
+		if parentID == owner {
+			return true
+		}
+		if parentID == ast.NoNode {
+			return false
+		}
+		branch = parentID
+	}
+	return false
+}
+
+func (s *renderState) renderedParentPrecedingOnlyControls(node ast.Node) bool {
+	if len(s.inlineStack) == 0 {
+		return false
+	}
+	owner := s.inlineStack[len(s.inlineStack)-1].owner
+	if owner == ast.NoNode {
+		return false
+	}
+	for branch := node.ID(); branch != ast.NoNode; {
+		for siblingID := s.document.Node(branch).PreviousSibling(); siblingID != ast.NoNode; siblingID = s.document.Node(siblingID).PreviousSibling() {
+			if !s.isOnlyUnrepresentableControlNode(siblingID) {
+				return false
+			}
+		}
+		parentID := s.document.Node(branch).Parent()
+		if parentID == owner {
+			return true
+		}
+		if parentID == ast.NoNode {
+			return false
+		}
+		branch = parentID
+	}
+	return false
+}
+
+func (s *renderState) mergedFrameMember(node ast.Node, kind ast.Kind) ast.NodeID {
+	candidate := ast.NoNode
+	for parentID := node.Parent(); parentID != ast.NoNode; parentID = s.document.Node(parentID).Parent() {
+		parent := s.document.Node(parentID)
+		if !isFormattingKind(parent.Kind()) {
+			break
+		}
+		if parent.Kind() == kind {
+			candidate = parentID
+		}
+	}
+	return candidate
+}
+
+func (s *renderState) mergedFrameHasSemanticPreceding(node ast.Node, kind ast.Kind) bool {
+	member := s.mergedFrameMember(node, kind)
+	if member == ast.NoNode {
+		return false
+	}
+	for branch := node.ID(); branch != member; {
+		for siblingID := s.document.Node(branch).PreviousSibling(); siblingID != ast.NoNode; siblingID = s.document.Node(siblingID).PreviousSibling() {
+			if !s.isOnlyUnrepresentableControlNode(siblingID) {
+				return true
+			}
+		}
+		branch = s.document.Node(branch).Parent()
+		if branch == ast.NoNode {
+			return false
+		}
+	}
+	return false
+}
+
+func (s *renderState) isOnlyUnrepresentableControlNode(id ast.NodeID) bool {
+	node := s.document.Node(id)
+	if node.Kind() == ast.Text {
+		return onlyUnrepresentableControls(node.Text())
+	}
+	return isFormattingKind(node.Kind()) && s.onlyUnrepresentableControlContent(id)
+}
+
+func (s *renderState) hasOnlyChildEmphasisChain(node ast.Node) bool {
+	hasNested := false
+	for node.FirstChild() != ast.NoNode && node.FirstChild() == node.LastChild() {
+		child := s.document.Node(node.FirstChild())
+		if child.Kind() != ast.Emphasis {
+			return hasNested && !isFormattingKind(child.Kind())
+		}
+		hasNested = true
+		node = child
+	}
+	return false
+}
+
+func (s *renderState) hasBranchedEmphasisInCollapsedStrong(node ast.Node) bool {
+	for childID := node.FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		child := s.document.Node(childID)
+		if !s.isCollapsedFormatting(child) {
+			continue
+		}
+		for nestedID := child.FirstChild(); nestedID != ast.NoNode; nestedID = s.document.Node(nestedID).NextSibling() {
+			nested := s.document.Node(nestedID)
+			if nested.Kind() == ast.Emphasis && child.FirstChild() != nestedID && child.LastChild() != nestedID {
+				return true
+			}
+			if isEmphasisKind(nested.Kind()) && s.isCollapsedFormatting(nested) && s.hasBranchedEmphasisInCollapsedStrong(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *renderState) needsHTMLFormattingFallback(node ast.Node) bool {
+	if node.Kind() == ast.Strong && (s.hasBranchedEmphasisInCollapsedStrong(node) || s.hasLeadingControlEmphasisAfterFormattingPeer(node)) || s.hasCollapsedFormattingBridge(node) || s.hasDeepPartialSameKind(node, node.Kind(), 0) || s.hasNestedFormattingAcrossControlLevels(node) {
+		return true
+	}
+	for childID := node.FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		child := s.document.Node(childID)
+		if isEmphasisKind(child.Kind()) && s.needsHTMLFormattingFallback(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *renderState) hasNestedFormattingAcrossControlLevels(node ast.Node) bool {
+	nextID := node.NextSibling()
+	if nextID == ast.NoNode || !s.startsWithUnrepresentableControl(s.document.Node(nextID)) {
+		return false
+	}
+	for childID := node.FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		child := s.document.Node(childID)
+		if !isFormattingKind(child.Kind()) {
+			continue
+		}
+		childNextID := child.NextSibling()
+		if childNextID != ast.NoNode && s.startsWithUnrepresentableControl(s.document.Node(childNextID)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *renderState) hasLeadingControlEmphasisAfterFormattingPeer(node ast.Node) bool {
+	previousID := node.PreviousSibling()
+	if previousID == ast.NoNode || !isFormattingKind(s.document.Node(previousID).Kind()) {
+		return false
+	}
+	firstID := node.FirstChild()
+	if firstID == ast.NoNode {
+		return false
+	}
+	first := s.document.Node(firstID)
+	if first.Kind() != ast.Text || !onlyUnrepresentableControls(first.Text()) {
+		return false
+	}
+	nextID := first.NextSibling()
+	return nextID != ast.NoNode && s.document.Node(nextID).Kind() == ast.Emphasis
+}
+
+func (s *renderState) hasDeepPartialSameKind(node ast.Node, kind ast.Kind, depth int) bool {
+	for childID := node.FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		child := s.document.Node(childID)
+		if child.Kind() != kind {
+			continue
+		}
+		nextDepth := depth + 1
+		partial := node.FirstChild() != childID || node.LastChild() != childID
+		parentMarker := inlineDelimiterMarker(node)
+		childMarker := inlineDelimiterMarker(child)
+		markerNeedsFallback := parentMarker != childMarker || kind == ast.Emphasis && parentMarker == "_" && childMarker == "_" && s.startsWithPunctuationText(child)
+		stableFallbackShape := node.Flags()&ast.InlineRecoveredDelimiter == 0 && child.Flags()&ast.InlineRecoveredDelimiter == 0 &&
+			markerNeedsFallback && s.hasOnlyTextChildren(child)
+		if nextDepth >= 2 && partial && stableFallbackShape {
+			return true
+		}
+		if s.hasDeepPartialSameKind(child, kind, nextDepth) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *renderState) startsWithPunctuationText(node ast.Node) bool {
+	firstID := node.FirstChild()
+	if firstID == ast.NoNode {
+		return false
+	}
+	first := s.document.Node(firstID)
+	if first.Kind() != ast.Text || first.Text() == "" {
+		return false
+	}
+	current, _ := utf8.DecodeRuneInString(first.Text())
+	return unicode.IsPunct(current) || unicode.IsSymbol(current)
+}
+
+func (s *renderState) hasCollapsedFormattingBridge(node ast.Node) bool {
+	if node.Flags()&ast.InlineRecoveredDelimiter == 0 {
+		return false
+	}
+	for childID := node.FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		child := s.document.Node(childID)
+		if !s.isCollapsedFormatting(child) || child.FirstChild() == ast.NoNode || child.FirstChild() != child.LastChild() {
+			continue
+		}
+		nested := s.document.Node(child.FirstChild())
+		if !isFormattingKind(nested.Kind()) {
+			continue
+		}
+		nextID := child.NextSibling()
+		if nextID != ast.NoNode && s.document.Node(nextID).Kind() == nested.Kind() {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *renderState) inlineFormattingHTML(id ast.NodeID) error {
+	node := s.document.Node(id)
+	tag := "em"
+	if node.Kind() == ast.Strong {
+		tag = "strong"
+	}
+	s.output.WriteString("<" + tag + ">")
+	for childID := node.FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		child := s.document.Node(childID)
+		if isEmphasisKind(child.Kind()) {
+			if err := s.inlineFormattingHTML(childID); err != nil {
+				return err
+			}
+			continue
+		}
+		if child.Kind() == ast.Text {
+			s.output.WriteString(escapeText(child.Text()))
+			continue
+		}
+		if err := s.inline(childID); err != nil {
+			return err
+		}
+	}
+	s.output.WriteString("</" + tag + ">")
+	return nil
+}
+
+func (s *renderState) formattingAncestorsHaveFollowingFormattingPeer(node ast.Node) bool {
+	for parentID := node.Parent(); parentID != ast.NoNode; parentID = s.document.Node(parentID).Parent() {
+		parent := s.document.Node(parentID)
+		if !isEmphasisKind(parent.Kind()) {
+			return false
+		}
+		for nextID := parent.NextSibling(); nextID != ast.NoNode; nextID = s.document.Node(nextID).NextSibling() {
+			next := s.document.Node(nextID)
+			if next.Kind() == node.Kind() {
+				return true
+			}
+			if next.Kind() != ast.Text || !onlyUnrepresentableControls(next.Text()) {
+				break
+			}
+		}
+	}
+	return false
 }
 
 func (s *renderState) canReuseParentMarkerAcrossControls(node ast.Node) bool {
@@ -1425,21 +1903,43 @@ func (s *renderState) parentHasFollowingFormattingPeer(node ast.Node) bool {
 }
 
 func (s *renderState) followedByUnrepresentableControl(node ast.Node) bool {
-	if next := node.NextSibling(); next != ast.NoNode && s.startsWithUnrepresentableControl(s.document.Node(next)) {
-		return true
+	owner := node.Parent()
+	if len(s.inlineStack) != 0 {
+		owner = s.inlineStack[len(s.inlineStack)-1].owner
+		if owner == ast.NoNode {
+			frame := s.inlineStack[len(s.inlineStack)-1]
+			return frame.followingControlNeedsAsterisk && s.atFormattingTrailingEdge(s.document.Node(node.Parent()), node)
+		}
 	}
-	if len(s.inlineStack) == 0 {
-		return false
+	controlCount := 0
+	for branch := node.ID(); branch != ast.NoNode; {
+		for nextID := s.document.Node(branch).NextSibling(); nextID != ast.NoNode; nextID = s.document.Node(nextID).NextSibling() {
+			next := s.document.Node(nextID)
+			if next.Kind() != ast.Text {
+				if s.isOnlyUnrepresentableControlNode(nextID) {
+					controlCount += utf8.RuneCountInString(s.unrepresentableControlContent(nextID))
+					continue
+				}
+				return false
+			}
+			for _, current := range next.Text() {
+				if unicode.IsControl(current) && !numericEntityRoundTrips(current) {
+					controlCount++
+					continue
+				}
+				if controlCount == 0 {
+					return false
+				}
+				return !unicode.IsSpace(current) && !unicode.IsPunct(current) && !unicode.IsSymbol(current)
+			}
+		}
+		parentID := s.document.Node(branch).Parent()
+		if parentID == owner || parentID == ast.NoNode {
+			return controlCount >= 2
+		}
+		branch = parentID
 	}
-	frame := s.inlineStack[len(s.inlineStack)-1]
-	if !frame.followingControl || frame.followingControlMoved {
-		return false
-	}
-	// The merged group's next member is relevant only to formatting at the
-	// trailing edge of the current member. A nested node followed by ordinary
-	// content closes before that boundary and must retain its own marker.
-	parent := s.document.Node(node.Parent())
-	return s.atFormattingTrailingEdge(parent, node)
+	return controlCount >= 2
 }
 
 func (s *renderState) onlyChildAfterMovingControls(node ast.Node) bool {
@@ -1718,7 +2218,7 @@ func (s *renderState) needsLeadingEntity(node ast.Node, text string) bool {
 	}
 	first, _ := utf8.DecodeRuneInString(text)
 	previous := s.document.Node(node.PreviousSibling())
-	if previous.Kind() == ast.Autolink && strings.ContainsAny(previous.Destination(), "<>") && strings.ContainsRune(`\`+"`*_{}[]<>#+-.:!|~)", first) {
+	if previous.Kind() == ast.Autolink && strings.ContainsAny(previous.Destination(), "<>") && !s.autolinkNeedsExplicitSyntax(previous) && strings.ContainsRune(`\`+"`*_{}[]<>#+-.:!|~)", first) {
 		return true
 	}
 	if !isEntityBoundaryRune(first) {

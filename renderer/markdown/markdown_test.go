@@ -110,6 +110,15 @@ func TestInvalidAngleAutolinkDoesNotAbsorbFollowingEscape(t *testing.T) {
 	}
 }
 
+func TestInvalidAngleAutolinkBeforeTextRunUsesExplicitSyntax(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "http://>!!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "[http\\://\\>](http://>)\\!\\!\n" || second != first {
+		t.Fatalf("invalid-angle autolink before text run: first=%q second=%q", first, second)
+	}
+}
+
 func TestAdjacentEmphasisDelimitersRemainDistinct(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "0*0**!")
@@ -809,6 +818,276 @@ func TestSingleTildeAfterRangeOperandUsesDoubleDelimiter(t *testing.T) {
 	second := normalize(t, profile.EnhanceMarkV1, first)
 	if first != "*0~~0~~*\n" || second != first {
 		t.Fatalf("single tilde after range operand: first=%q second=%q", first, second)
+	}
+}
+
+func TestSingleTildeAfterRangeOperandAndControlUsesDoubleDelimiter(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0\x00~0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0~~\x000~~\n" || second != first {
+		t.Fatalf("single tilde after controlled range operand: first=%q second=%q", first, second)
+	}
+}
+
+func TestStrongGroupInsidePartialMergedEmphasisAlternatesMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*__0__**0**!*0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*__00__\\!0*\n" || second != first {
+		t.Fatalf("strong group in partial merged emphasis: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedOpeningRunAfterTextUsesRenderedControlBoundary(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0*\x00**0*\x00*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0***\x000**\x000*\n" || second != first {
+		t.Fatalf("merged opening after moved control: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedEmphasisKeepsAlternateMarkerAtWordBoundary(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "\x00**0* \x00*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**\x00&#48;_&#32;\x00_**\n" || second != first {
+		t.Fatalf("nested emphasis alternate at word boundary: first=%q second=%q", first, second)
+	}
+}
+
+func TestCollapsedStrongBeforePeerEmphasisKeepsNestedMarkerDistinct(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "____*0__*0*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "__*0*__*0*&#48;\n" || second != first {
+		t.Fatalf("collapsed strong before emphasis peer: first=%q second=%q", first, second)
+	}
+}
+
+func TestAmbiguousRecoveredFormattingUsesStableHTMLFallback(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*****0*0*0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "<em><strong><strong>0<em>0</em>0</strong></strong></em>\n" || second != first {
+		t.Fatalf("ambiguous recovered formatting fallback: first=%q second=%q", first, second)
+	}
+}
+
+func TestRecoveredFormattingBridgeUsesStableHTMLFallback(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*!***0*****0**0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "<em>\\!<em><strong>0</strong></em><strong>0</strong>0</em>\n" || second != first {
+		t.Fatalf("recovered formatting bridge fallback: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedEntityRewriteRestabilizesOuterOpeningBoundary(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0*0*****0*****")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "&#48;*&#48;____0____*\n" || second != first {
+		t.Fatalf("outer opening after nested entity rewrite: first=%q second=%q", first, second)
+	}
+}
+
+func TestPureEmphasisChainCombinesWithStrongParentMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "__*_*0*_*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "_____0_____\n" || second != first {
+		t.Fatalf("pure emphasis chain under strong: first=%q second=%q", first, second)
+	}
+}
+
+func TestStrongAfterCollapsedWrapperHonorsRenderedPrecedingContent(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0 *\x00**0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*0 __\x000__*\n" || second != first {
+		t.Fatalf("strong after collapsed wrapper: first=%q second=%q", first, second)
+	}
+}
+
+func TestDeepPartialSameKindFormattingUsesStableHTMLFallback(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "__!*!*_ 0_ ")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "<em><em>\\!<em>\\!</em></em> 0</em>\n" || second != first {
+		t.Fatalf("deep partial same-kind fallback: first=%q second=%q", first, second)
+	}
+}
+
+func TestCombinedOpeningBeforeControlRemovesUnneededEntity(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0***\x00**\x00**")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0***\x00\x00***\\*\n" || second != first {
+		t.Fatalf("combined opening before control: first=%q second=%q", first, second)
+	}
+}
+
+func TestStrongChainCombinesAcrossTrailingControl(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*****0****\x00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*****0\x00*****\n" || second != first {
+		t.Fatalf("strong chain across trailing control: first=%q second=%q", first, second)
+	}
+}
+
+func TestStrongInsideCollapsedWrapperHonorsNestedFollowingText(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "_*__!__!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "_**\\!**\\!_\n" || second != first {
+		t.Fatalf("strong before nested following text: first=%q second=%q", first, second)
+	}
+}
+
+func TestSharedStrongLayerIncludesCollapsedTextDescendant(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0******!*0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***0\\!0***\n" || second != first {
+		t.Fatalf("shared strong with collapsed text: first=%q second=%q", first, second)
+	}
+}
+
+func TestStrongAfterFormattingPeerUsesStableControlFallback(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0***\x00*0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*0*<strong>\x00<em>0</em></strong>\n" || second != first {
+		t.Fatalf("strong after peer with leading control: first=%q second=%q", first, second)
+	}
+}
+
+func TestRenderedOpeningWhitespaceUsesNumericEntity(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "** *\x00**")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**&#32;_\x00_**\n" || second != first {
+		t.Fatalf("rendered opening whitespace: first=%q second=%q", first, second)
+	}
+}
+
+func TestFactoredStrongAfterPunctuationAlternatesMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*!***_0_")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*\\!__0__*\n" || second != first {
+		t.Fatalf("factored strong after punctuation: first=%q second=%q", first, second)
+	}
+}
+
+func TestCodeFenceWithBacktickInfoUsesTildeMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "~~~`")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "~~~`\n\n~~~\n" || second != first {
+		t.Fatalf("backtick info code fence: first=%q second=%q", first, second)
+	}
+}
+
+func TestCollapsedTrailingChildUsesRenderedControlBoundary(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*****0**\x000*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***0**\x000*\n" || second != first {
+		t.Fatalf("collapsed trailing child control boundary: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedEmphasisBeforeOuterPeerKeepsDistinctMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "____*0____*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "____*0*____*0*\n" || second != first {
+		t.Fatalf("nested emphasis before outer peer: first=%q second=%q", first, second)
+	}
+}
+
+func TestOnlyChildEmphasisUsesActualRenderedStrongMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "___*0*_*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "_***0***&#48;_\n" || second != first {
+		t.Fatalf("only-child emphasis rendered marker: first=%q second=%q", first, second)
+	}
+}
+
+func TestDeepPartialUnderscoreEmphasisUsesStableHTMLFallback(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "___!_!_ 0_ ")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "<em><em><em>\\!</em>\\!</em> 0</em>\n" || second != first {
+		t.Fatalf("deep partial underscore emphasis: first=%q second=%q", first, second)
+	}
+}
+
+func TestEmphasisInsideCollapsedStrongHonorsRenderedFollowingText(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "____*!__!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "__*\\!*\\!__\n" || second != first {
+		t.Fatalf("emphasis in collapsed strong before text: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedStrongAfterSemanticPrefixKeepsAlternateMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*** ***\x00**\x00*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*\\*\\* __\x00\x00__*\n" || second != first {
+		t.Fatalf("merged strong after semantic prefix: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedStrongUsesParentMarkerAcrossTrailingControl(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "****0**\x00**")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "****0**\x00**\n" || second != first {
+		t.Fatalf("nested strong across trailing control: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedFormattingAcrossControlLevelsUsesHTMLFallback(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*!*0*\x00*\x00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "<em>\\!<em>0</em>\x00</em>\x00\n" || second != first {
+		t.Fatalf("nested formatting across control levels: first=%q second=%q", first, second)
+	}
+}
+
+func TestOnlySemanticEmphasisChildCombinesAcrossTrailingControl(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0*\x00**")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***0*\x00**\n" || second != first {
+		t.Fatalf("semantic emphasis child across control: first=%q second=%q", first, second)
+	}
+}
+
+func TestStrongBeforeTwoControlLevelsUsesAsteriskMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0*\x00*\x00")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***0**\x00\x00*\n" || second != first {
+		t.Fatalf("strong before two control levels: first=%q second=%q", first, second)
+	}
+}
+
+func TestFactoredStrongInsideUnderscoreEmphasisUsesAsterisk(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "_0_**_00_")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "_0**00**_\n" || second != first {
+		t.Fatalf("factored strong in underscore emphasis: first=%q second=%q", first, second)
 	}
 }
 
