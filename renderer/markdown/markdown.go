@@ -1299,9 +1299,21 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 				}
 			}
 			adjustedForParent = true
+		case node.Kind() == ast.Emphasis && parent.kind == ast.Strong && node.FirstChild() != ast.NoNode && node.FirstChild() == node.LastChild() && s.document.Node(node.FirstChild()).Kind() == ast.Strong && s.effectiveInlineDelimiterMarker(astParent)[0] != parent.marker:
+			// A merged ancestor can force the strong parent away from its AST
+			// marker. Base the nested emphasis run on the marker that was actually
+			// emitted so the reconstructed direct-parent tree chooses the same run.
+			marker = string(parent.marker)
+			adjustedForParent = true
 		case node.Kind() == ast.Emphasis && marker[0] == parent.marker && !onlyChild:
 			marker = alternateInlineDelimiterMarker(marker)
 			adjustedForParent = true
+		}
+		if node.Kind() == ast.Strong && parent.merged && parent.hasPreceding {
+			output := s.output.String()
+			if endsWithUnescapedFormattingDelimiter(output) && output[len(output)-1] == marker[0] {
+				marker = alternateInlineDelimiterMarker(marker)
+			}
 		}
 	}
 	if previousID := s.previousFormattingSibling(node); previousID != ast.NoNode {

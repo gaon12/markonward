@@ -776,6 +776,24 @@ func TestCollapsedStrikethroughControlNeedsNoLeadingEntity(t *testing.T) {
 	}
 }
 
+func TestMergedParentAlternatesStrongAfterRenderedDelimiter(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*!***0*******!00*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*\\!___0___**\\!00***\n" || second != first {
+		t.Fatalf("merged-parent strong marker boundary: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedEmphasisUsesRenderedStrongParentMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "******0***0****!")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*_____0___&#48;__\\!*\n" || second != first {
+		t.Fatalf("nested emphasis rendered-strong marker: first=%q second=%q", first, second)
+	}
+}
+
 func TestOnlyChildDeepEmphasisCombinesOneMarkerRun(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_*_0_*_")
