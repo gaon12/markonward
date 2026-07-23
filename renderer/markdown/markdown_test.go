@@ -758,6 +758,15 @@ func TestLinkDestinationOpeningParenthesisIsEscaped(t *testing.T) {
 	}
 }
 
+func TestMultilineSetextHeadingRemainsOneBlock(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0\n0\n=")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0\n0\n===\n" || second != first {
+		t.Fatalf("multiline setext heading: first=%q second=%q", first, second)
+	}
+}
+
 func TestOnlyChildDeepEmphasisCombinesOneMarkerRun(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_*_0_*_")

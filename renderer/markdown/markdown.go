@@ -134,6 +134,19 @@ func (s *renderState) block(id ast.NodeID) error { //nolint:gocyclo // The switc
 		if level < 1 || level > 6 {
 			return fmt.Errorf("markdown: invalid heading level %d", level)
 		}
+		if level <= 2 && s.hasInlineKind(id, ast.SoftBreak) {
+			if err := s.inlines(id); err != nil {
+				return err
+			}
+			s.output.WriteByte('\n')
+			if level == 1 {
+				s.output.WriteString("===")
+			} else {
+				s.output.WriteString("---")
+			}
+			s.blankLine()
+			break
+		}
 		s.output.WriteString(strings.Repeat("#", level) + " ")
 		if err := s.inlines(id); err != nil {
 			return err
@@ -193,6 +206,16 @@ func (s *renderState) block(id ast.NodeID) error { //nolint:gocyclo // The switc
 		return fmt.Errorf("markdown: unsupported node %s", node.Kind())
 	}
 	return nil
+}
+
+func (s *renderState) hasInlineKind(parent ast.NodeID, kind ast.Kind) bool {
+	for childID := s.document.Node(parent).FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		child := s.document.Node(childID)
+		if child.Kind() == kind || s.hasInlineKind(childID, kind) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *renderState) countRecoveredFormatting(parent ast.NodeID) int {
