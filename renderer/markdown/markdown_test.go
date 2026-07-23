@@ -587,6 +587,33 @@ func TestMergedStrongGroupCombinesAcrossTrailingControl(t *testing.T) {
 	}
 }
 
+func TestRecoveredStrongCombinesAcrossCollapsedControlSibling(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*__\x00_**0\x00_")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***\x000\x00***\n" || second != first {
+		t.Fatalf("recovered strong after collapsed control sibling: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedGroupControlBoundaryDoesNotAffectNestedDelimiter(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*!*00*0*\x00*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*\\!_00_&#48;\x000*\n" || second != first {
+		t.Fatalf("merged group control after nested formatting: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedFormattingGroupSharesSimpleNestedLayer(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0******0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***00***\n" || second != first {
+		t.Fatalf("merged group with shared nested formatting: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")

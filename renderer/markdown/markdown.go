@@ -401,6 +401,14 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 	s.prefixedInline[first] = boundary != ""
 	s.inlineStack = append(s.inlineStack, inlineFrame{owner: ast.NoNode, kind: firstNode.Kind(), marker: delimiter[0], merged: true})
 	defer func() { s.inlineStack = s.inlineStack[:len(s.inlineStack)-1] }()
+	if childKind, ok := s.sharedSimpleFormattingChildKind(first, last); ok {
+		if err := s.inlineSharedFormattingChildren(first, last, childKind, delimiter[0]); err != nil {
+			return err
+		}
+		s.stabilizeClosingBoundary(s.document.Node(last), rune(delimiter[0]))
+		s.output.WriteString(delimiter)
+		return nil
+	}
 	for current := first; ; current = s.document.Node(current).NextSibling() {
 		currentNode := s.document.Node(current)
 		s.inlineStack[len(s.inlineStack)-1].hasPreceding = current != first
@@ -436,6 +444,52 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 		}
 	}
 	s.stabilizeClosingBoundary(s.document.Node(last), rune(delimiter[0]))
+	s.output.WriteString(delimiter)
+	return nil
+}
+
+func (s *renderState) sharedSimpleFormattingChildKind(first, last ast.NodeID) (ast.Kind, bool) {
+	// When every merged outer member contains the same opposite formatting
+	// layer, closing and reopening that inner layer would create an ambiguous
+	// delimiter run. Sharing it preserves the semantics as one canonical run.
+	outerKind := s.document.Node(first).Kind()
+	sharedKind := ast.Invalid
+	for current := first; ; current = s.document.Node(current).NextSibling() {
+		node := s.document.Node(current)
+		childID := node.FirstChild()
+		if node.Kind() != outerKind || childID == ast.NoNode || childID != node.LastChild() {
+			return ast.Invalid, false
+		}
+		child := s.document.Node(childID)
+		textID := child.FirstChild()
+		if !isEmphasisKind(child.Kind()) || child.Kind() == outerKind || textID == ast.NoNode || textID != child.LastChild() || s.document.Node(textID).Kind() != ast.Text {
+			return ast.Invalid, false
+		}
+		if sharedKind == ast.Invalid {
+			sharedKind = child.Kind()
+		} else if child.Kind() != sharedKind {
+			return ast.Invalid, false
+		}
+		if current == last {
+			return sharedKind, true
+		}
+	}
+}
+
+func (s *renderState) inlineSharedFormattingChildren(first, last ast.NodeID, kind ast.Kind, marker byte) error {
+	delimiter := strings.Repeat(string(marker), delimiterLength(kind))
+	s.output.WriteString(delimiter)
+	s.inlineStack = append(s.inlineStack, inlineFrame{owner: ast.NoNode, kind: kind, marker: marker, merged: true})
+	defer func() { s.inlineStack = s.inlineStack[:len(s.inlineStack)-1] }()
+	for current := first; ; current = s.document.Node(current).NextSibling() {
+		childID := s.document.Node(current).FirstChild()
+		if err := s.inlines(childID); err != nil {
+			return err
+		}
+		if current == last {
+			break
+		}
+	}
 	s.output.WriteString(delimiter)
 	return nil
 }
@@ -1020,7 +1074,7 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 		onlyChild := astParent.FirstChild() == node.ID() && astParent.LastChild() == node.ID()
 		switch {
 		case node.Kind() == ast.Strong && parent.kind == ast.Emphasis:
-			combine := onlyChild && !parent.hasPreceding && !parent.hasFollowing
+			combine := (onlyChild || s.onlyChildAfterMovingControls(node)) && !parent.hasPreceding && !parent.hasFollowing
 			if combine {
 				marker = string(parent.marker)
 			} else if marker[0] == parent.marker {
@@ -1134,7 +1188,14 @@ func (s *renderState) followedByUnrepresentableControl(node ast.Node) bool {
 	if next := node.NextSibling(); next != ast.NoNode && s.startsWithUnrepresentableControl(s.document.Node(next)) {
 		return true
 	}
-	return len(s.inlineStack) != 0 && s.inlineStack[len(s.inlineStack)-1].followingControl
+	if len(s.inlineStack) == 0 || !s.inlineStack[len(s.inlineStack)-1].followingControl {
+		return false
+	}
+	// The merged group's next member is relevant only to formatting at the
+	// trailing edge of the current member. A nested node followed by ordinary
+	// content closes before that boundary and must retain its own marker.
+	parent := s.document.Node(node.Parent())
+	return s.atFormattingTrailingEdge(parent, node)
 }
 
 func (s *renderState) onlyChildAfterMovingControls(node ast.Node) bool {
@@ -1143,7 +1204,9 @@ func (s *renderState) onlyChildAfterMovingControls(node ast.Node) bool {
 	}
 	for previousID := node.PreviousSibling(); previousID != ast.NoNode; previousID = s.document.Node(previousID).PreviousSibling() {
 		previous := s.document.Node(previousID)
-		if previous.Kind() != ast.Text || !onlyUnrepresentableControls(previous.Text()) {
+		directControl := previous.Kind() == ast.Text && onlyUnrepresentableControls(previous.Text())
+		collapsedControl := isEmphasisKind(previous.Kind()) && s.hasDuplicateRecoveredLayer(previous) && s.onlyUnrepresentableControlContent(previousID)
+		if !directControl && !collapsedControl {
 			return false
 		}
 	}
@@ -1193,6 +1256,12 @@ func (s *renderState) previousFormattingSibling(node ast.Node) ast.NodeID {
 	for previousID := node.PreviousSibling(); previousID != ast.NoNode; previousID = s.document.Node(previousID).PreviousSibling() {
 		previous := s.document.Node(previousID)
 		if isEmphasisKind(previous.Kind()) {
+			// A duplicate recovered layer containing only controls renders no
+			// delimiter of its own. Treat it like the movable control text it
+			// collapses to, rather than forcing the next real delimiter to switch.
+			if s.hasDuplicateRecoveredLayer(previous) && s.onlyUnrepresentableControlContent(previousID) {
+				continue
+			}
 			return previousID
 		}
 		if previous.Kind() != ast.Text || !onlyUnrepresentableControls(previous.Text()) {
