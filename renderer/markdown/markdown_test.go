@@ -749,6 +749,15 @@ func TestLinkDestinationWhitespaceUsesNumericReference(t *testing.T) {
 	}
 }
 
+func TestOnlyChildDeepEmphasisCombinesOneMarkerRun(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "_*_0_*_")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "___0___\n" || second != first {
+		t.Fatalf("only-child deep emphasis run: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")

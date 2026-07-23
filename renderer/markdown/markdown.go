@@ -1255,7 +1255,10 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 			}
 		case node.Kind() == ast.Emphasis && parent.kind == ast.Emphasis:
 			reuseMergedMarker := parent.merged && parent.hasPreceding && endsWithUnescapedFormattingDelimiter(s.output.String())
-			if marker[0] == parent.marker && !reuseMergedMarker {
+			combineDeepRun := onlyChild && (s.hasEmphasisDescendant(node) || len(s.inlineStack) >= 2 && s.inlineStack[len(s.inlineStack)-2].kind == ast.Emphasis && s.inlineStack[len(s.inlineStack)-2].marker == parent.marker)
+			if combineDeepRun {
+				marker = string(parent.marker)
+			} else if marker[0] == parent.marker && !reuseMergedMarker {
 				marker = alternateInlineDelimiterMarker(marker)
 			}
 			// Two delimiter characters cannot alternate indefinitely. If the
