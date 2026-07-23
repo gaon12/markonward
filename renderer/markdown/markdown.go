@@ -1247,7 +1247,8 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 			// rendered parent so a second parse chooses the same four-delimiter run.
 			marker = string(parent.marker)
 		case node.Kind() == ast.Strong && parent.kind == ast.Emphasis:
-			combine := (onlyChild || s.onlyChildAfterMovingControls(node)) && !parent.hasPreceding && !parent.hasFollowing
+			onlyChildAfterControls := !onlyChild && s.onlyChildAfterMovingControls(node)
+			combine := (onlyChild && !parent.hasPreceding || onlyChildAfterControls) && !parent.hasFollowing
 			if combine {
 				marker = string(parent.marker)
 			} else if marker[0] == parent.marker {
@@ -1307,7 +1308,8 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 			}
 		}
 	}
-	if marker == "_" && s.followedByUnrepresentableControl(node) && s.previousFormattingSibling(node) == ast.NoNode {
+	lastChild := s.document.Node(node.LastChild())
+	if marker == "_" && s.followedByUnrepresentableControl(node) && s.previousFormattingSibling(node) == ast.NoNode && !isFormattingKind(lastChild.Kind()) {
 		marker = "*"
 	}
 	if marker == "_" {

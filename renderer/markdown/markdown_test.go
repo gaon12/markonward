@@ -758,6 +758,24 @@ func TestOnlyChildDeepEmphasisCombinesOneMarkerRun(t *testing.T) {
 	}
 }
 
+func TestStrongAfterMovedControlCombinesWithParentMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "_\x00**0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "___\x000___\n" || second != first {
+		t.Fatalf("strong after moved control: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedStrongKeepsAlternateMarkerWhenControlMovesInside(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "**0****0****\x00**")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "**&#48;____0\x00____**\n" || second != first {
+		t.Fatalf("nested strong before moved control: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")
