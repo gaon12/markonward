@@ -2010,9 +2010,20 @@ func escapeText(value string) string {
 }
 
 func escapeDestination(value string) string {
-	value = strings.ReplaceAll(value, "\\", "\\\\")
-	value = strings.ReplaceAll(value, ")", "\\)")
-	return value
+	var output strings.Builder
+	output.Grow(len(value))
+	for _, current := range value {
+		switch {
+		case current == '\\' || current == ')':
+			output.WriteByte('\\')
+			output.WriteRune(current)
+		case unicode.IsSpace(current) && numericEntityRoundTrips(current):
+			output.WriteString("&#" + strconv.Itoa(int(current)) + ";")
+		default:
+			output.WriteRune(current)
+		}
+	}
+	return output.String()
 }
 
 func longestRun(value string, marker byte) int {

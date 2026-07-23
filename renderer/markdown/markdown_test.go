@@ -740,6 +740,15 @@ func TestRecoveredFactoringWithLeadingPunctuationIsFlattened(t *testing.T) {
 	}
 }
 
+func TestLinkDestinationWhitespaceUsesNumericReference(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "[](\\ )")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "[](\\\\&#32;)\n" || second != first {
+		t.Fatalf("link destination whitespace: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")
