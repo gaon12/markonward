@@ -387,7 +387,7 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 		parentFrame := s.inlineStack[len(s.inlineStack)-1]
 		parent := s.document.Node(firstNode.Parent())
 		coversParent := s.formattingGroupCoversParent(parent, first, last)
-		if firstNode.Kind() == ast.Strong && parentFrame.kind == ast.Emphasis && coversParent && !s.formattingGroupHasEmphasisDescendant(first, last) {
+		if firstNode.Kind() == ast.Strong && parentFrame.kind == ast.Emphasis && coversParent {
 			delimiter = strings.Repeat(string(parentFrame.marker), length)
 		}
 		if firstNode.Kind() == ast.Emphasis && parentFrame.kind == ast.Strong && coversParent && !s.formattingGroupHasEmphasisDescendant(first, last) {

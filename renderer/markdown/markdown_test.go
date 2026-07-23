@@ -614,6 +614,15 @@ func TestMergedFormattingGroupSharesSimpleNestedLayer(t *testing.T) {
 	}
 }
 
+func TestMergedStrongGroupCombinesWithParentAroundNestedEmphasis(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "****0*0****0*0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***_0_&#48;0***&#48;\n" || second != first {
+		t.Fatalf("merged strong group with nested emphasis: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")
