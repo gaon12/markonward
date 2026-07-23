@@ -457,8 +457,8 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 	s.prefixedInline[first] = boundary != ""
 	s.inlineStack = append(s.inlineStack, inlineFrame{owner: ast.NoNode, kind: firstNode.Kind(), marker: delimiter[0], merged: true})
 	defer func() { s.inlineStack = s.inlineStack[:len(s.inlineStack)-1] }()
-	if childKind, ok := s.sharedSimpleFormattingChildKind(first, last); ok {
-		if err := s.inlineSharedFormattingChildren(first, last, childKind, delimiter[0]); err != nil {
+	if childKind, firstNested, lastNested, ok := s.sharedSimpleFormattingChildKind(first, last); ok {
+		if err := s.inlineSharedFormattingChildren(first, last, firstNested, lastNested, childKind, delimiter[0]); err != nil {
 			return err
 		}
 		s.stabilizeClosingBoundary(s.document.Node(last), rune(delimiter[0]))
@@ -505,60 +505,129 @@ func (s *renderState) inlineFormattingGroup(first, last ast.NodeID) error {
 	return nil
 }
 
-func (s *renderState) sharedSimpleFormattingChildKind(first, last ast.NodeID) (ast.Kind, bool) {
+func (s *renderState) sharedSimpleFormattingChildKind(first, last ast.NodeID) (ast.Kind, ast.NodeID, ast.NodeID, bool) {
 	// When every merged outer member contains the same opposite formatting
 	// layer, closing and reopening that inner layer would create an ambiguous
 	// delimiter run. Sharing it preserves the semantics as one canonical run.
 	outerKind := s.document.Node(first).Kind()
 	sharedKind := ast.Invalid
+	firstNested, lastNested := ast.NoNode, ast.NoNode
+	ended := false
 	for current := first; ; current = s.document.Node(current).NextSibling() {
 		node := s.document.Node(current)
-		childID := node.LastChild()
-		if node.Kind() != outerKind || childID == ast.NoNode {
-			return ast.Invalid, false
+		if node.Kind() != outerKind {
+			return ast.Invalid, ast.NoNode, ast.NoNode, false
 		}
-		for prefixID := node.FirstChild(); prefixID != childID; prefixID = s.document.Node(prefixID).NextSibling() {
-			if current != first || s.document.Node(prefixID).Kind() != ast.Text {
-				return ast.Invalid, false
+		childID, childKind, ok := s.simpleOppositeFormattingChild(node, outerKind)
+		if !ok {
+			if !s.hasOnlyTextChildren(node) {
+				return ast.Invalid, ast.NoNode, ast.NoNode, false
+			}
+			if firstNested != ast.NoNode {
+				ended = true
+			}
+		} else {
+			if ended || firstNested != ast.NoNode && node.FirstChild() != childID {
+				return ast.Invalid, ast.NoNode, ast.NoNode, false
+			}
+			if sharedKind == ast.Invalid {
+				sharedKind, firstNested = childKind, current
+			} else if childKind != sharedKind {
+				return ast.Invalid, ast.NoNode, ast.NoNode, false
+			}
+			lastNested = current
+			if node.LastChild() != childID {
+				ended = true
 			}
 		}
-		child := s.document.Node(childID)
-		textID := child.FirstChild()
-		if !isEmphasisKind(child.Kind()) || child.Kind() == outerKind || textID == ast.NoNode || textID != child.LastChild() || s.document.Node(textID).Kind() != ast.Text {
-			return ast.Invalid, false
-		}
-		if sharedKind == ast.Invalid {
-			sharedKind = child.Kind()
-		} else if child.Kind() != sharedKind {
-			return ast.Invalid, false
-		}
 		if current == last {
-			return sharedKind, true
+			return sharedKind, firstNested, lastNested, firstNested != ast.NoNode && firstNested != lastNested
 		}
 	}
 }
 
-func (s *renderState) inlineSharedFormattingChildren(first, last ast.NodeID, kind ast.Kind, marker byte) error {
-	firstNode := s.document.Node(first)
-	for prefixID := firstNode.FirstChild(); prefixID != firstNode.LastChild(); prefixID = s.document.Node(prefixID).NextSibling() {
+func (s *renderState) hasOnlyTextChildren(node ast.Node) bool {
+	if node.FirstChild() == ast.NoNode {
+		return false
+	}
+	for childID := node.FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		if s.document.Node(childID).Kind() != ast.Text {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *renderState) simpleOppositeFormattingChild(node ast.Node, outerKind ast.Kind) (ast.NodeID, ast.Kind, bool) {
+	found := ast.NoNode
+	foundKind := ast.Invalid
+	for childID := node.FirstChild(); childID != ast.NoNode; childID = s.document.Node(childID).NextSibling() {
+		child := s.document.Node(childID)
+		if child.Kind() == ast.Text {
+			continue
+		}
+		textID := child.FirstChild()
+		if found != ast.NoNode || !isEmphasisKind(child.Kind()) || child.Kind() == outerKind || textID == ast.NoNode || textID != child.LastChild() || s.document.Node(textID).Kind() != ast.Text {
+			return ast.NoNode, ast.Invalid, false
+		}
+		found, foundKind = childID, child.Kind()
+	}
+	return found, foundKind, found != ast.NoNode
+}
+
+func (s *renderState) inlineSharedFormattingChildren(first, last, firstNested, lastNested ast.NodeID, kind ast.Kind, marker byte) error {
+	for current := first; current != firstNested; current = s.document.Node(current).NextSibling() {
+		if err := s.inlines(current); err != nil {
+			return err
+		}
+	}
+	firstNestedNode := s.document.Node(firstNested)
+	firstChild, _, _ := s.simpleOppositeFormattingChild(firstNestedNode, firstNestedNode.Kind())
+	for prefixID := firstNestedNode.FirstChild(); prefixID != firstChild; prefixID = s.document.Node(prefixID).NextSibling() {
 		if err := s.inline(prefixID); err != nil {
 			return err
 		}
 	}
-	delimiter := strings.Repeat(string(marker), delimiterLength(kind))
+	lastNestedNode := s.document.Node(lastNested)
+	lastChild, _, _ := s.simpleOppositeFormattingChild(lastNestedNode, lastNestedNode.Kind())
+	nestedMarker := marker
+	if lastNested != last || lastNestedNode.LastChild() != lastChild {
+		nestedMarker = alternateInlineDelimiterMarker(string(marker))[0]
+	}
+	delimiter := strings.Repeat(string(nestedMarker), delimiterLength(kind))
 	s.output.WriteString(delimiter)
-	s.inlineStack = append(s.inlineStack, inlineFrame{owner: ast.NoNode, kind: kind, marker: marker, merged: true})
-	defer func() { s.inlineStack = s.inlineStack[:len(s.inlineStack)-1] }()
-	for current := first; ; current = s.document.Node(current).NextSibling() {
-		childID := s.document.Node(current).LastChild()
+	s.inlineStack = append(s.inlineStack, inlineFrame{owner: ast.NoNode, kind: kind, marker: nestedMarker, merged: true})
+	var nestedErr error
+	for current := firstNested; ; current = s.document.Node(current).NextSibling() {
+		currentNode := s.document.Node(current)
+		childID, _, _ := s.simpleOppositeFormattingChild(currentNode, currentNode.Kind())
 		if err := s.inlines(childID); err != nil {
+			nestedErr = err
+			break
+		}
+		if current == lastNested {
+			break
+		}
+	}
+	s.inlineStack = s.inlineStack[:len(s.inlineStack)-1]
+	if nestedErr != nil {
+		return nestedErr
+	}
+	s.output.WriteString(delimiter)
+	for suffixID := s.document.Node(lastChild).NextSibling(); suffixID != ast.NoNode; suffixID = s.document.Node(suffixID).NextSibling() {
+		if err := s.inline(suffixID); err != nil {
+			return err
+		}
+	}
+	for current := s.document.Node(lastNested).NextSibling(); current != ast.NoNode; current = s.document.Node(current).NextSibling() {
+		s.prepareFormattingGroupMember(s.document.Node(current))
+		if err := s.inlines(current); err != nil {
 			return err
 		}
 		if current == last {
 			break
 		}
 	}
-	s.output.WriteString(delimiter)
 	return nil
 }
 
@@ -1149,7 +1218,7 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 				marker = alternateInlineDelimiterMarker(marker)
 			}
 		case node.Kind() == ast.Emphasis && parent.kind == ast.Emphasis:
-			if marker[0] == parent.marker {
+			if marker[0] == parent.marker && (!parent.merged || !parent.hasPreceding) {
 				marker = alternateInlineDelimiterMarker(marker)
 			}
 			adjustedForParent = true
@@ -1574,7 +1643,7 @@ func (s *renderState) needsTrailingEntity(node ast.Node, text string) bool {
 	if s.isCollapsedFormatting(next) {
 		return false
 	}
-	if isFormattingKind(next.Kind()) && s.startsWithUnrepresentableControl(next) && !s.asteriskFallbackViolatesRuleOfThree(next) {
+	if isFormattingKind(next.Kind()) && s.startsWithDirectUnrepresentableControl(next) && !s.asteriskFallbackViolatesRuleOfThree(next) {
 		return false
 	}
 	if isFormattingKind(next.Kind()) && s.startsWithWordLikeText(next) && !s.asteriskFallbackViolatesRuleOfThree(next) {
@@ -1638,6 +1707,28 @@ func (s *renderState) startsWithUnrepresentableControl(node ast.Node) bool {
 	}
 	current, _ := utf8.DecodeRuneInString(node.Text())
 	return unicode.IsControl(current) && !numericEntityRoundTrips(current)
+}
+
+func (s *renderState) startsWithDirectUnrepresentableControl(node ast.Node) bool {
+	container := node
+	for {
+		child := s.document.Node(container.FirstChild())
+		if child.Kind() == ast.Text {
+			if child.Text() == "" {
+				return false
+			}
+			current, _ := utf8.DecodeRuneInString(child.Text())
+			return unicode.IsControl(current) && !numericEntityRoundTrips(current)
+		}
+		if !isEmphasisKind(child.Kind()) {
+			return false
+		}
+		combinedRun := isEmphasisKind(container.Kind()) && container.FirstChild() == child.ID() && container.LastChild() == child.ID() && container.Kind() != child.Kind()
+		if !s.hasDuplicateRecoveredLayer(child) && !combinedRun {
+			return false
+		}
+		container = child
+	}
 }
 
 func isEntityBoundaryRune(current rune) bool {

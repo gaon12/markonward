@@ -650,6 +650,33 @@ func TestMergedFormattingGroupSharesNestedLayerAfterTextPrefix(t *testing.T) {
 	}
 }
 
+func TestMergedFormattingGroupSharesNestedLayerBeforeTextSuffix(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0******0**0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*__00__&#48;*\n" || second != first {
+		t.Fatalf("merged group with suffixed shared formatting: first=%q second=%q", first, second)
+	}
+}
+
+func TestNestedStrikethroughDelimiterKeepsLeadingEntity(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0*\x00~0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "&#48;*~\x000~*\n" || second != first {
+		t.Fatalf("entity before emphasis containing strikethrough: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedGroupKeepsNestedMarkerAfterEarlierMember(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "___0_*_0_*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "_**0**_0__\n" || second != first {
+		t.Fatalf("nested emphasis after earlier merged member: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")
