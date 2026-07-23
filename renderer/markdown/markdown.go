@@ -590,8 +590,16 @@ func (s *renderState) inlineSharedFormattingChildren(first, last, firstNested, l
 	lastNestedNode := s.document.Node(lastNested)
 	lastChild, _, _ := s.simpleOppositeFormattingChild(lastNestedNode, lastNestedNode.Kind())
 	nestedMarker := marker
-	if lastNested != last || lastNestedNode.LastChild() != lastChild {
-		nestedMarker = alternateInlineDelimiterMarker(string(marker))[0]
+	leadingPartial := firstNested != first || firstNestedNode.FirstChild() != firstChild
+	trailingPartial := lastNested != last || lastNestedNode.LastChild() != lastChild
+	if leadingPartial || trailingPartial {
+		candidate := alternateInlineDelimiterMarker(string(marker))[0]
+		previous, _ := utf8.DecodeLastRuneInString(s.output.String())
+		firstText := s.document.Node(s.document.Node(firstChild).FirstChild()).Text()
+		next, _ := utf8.DecodeRuneInString(firstText)
+		if candidate != '_' || delimiterCanOpen(rune(candidate), previous, next) {
+			nestedMarker = candidate
+		}
 	}
 	delimiter := strings.Repeat(string(nestedMarker), delimiterLength(kind))
 	s.output.WriteString(delimiter)
@@ -1199,6 +1207,19 @@ func delimiterCanClose(marker, previous, next rune) bool {
 		return rightFlanking && (!leftFlanking || nextPunctuation)
 	}
 	return rightFlanking
+}
+
+func delimiterCanOpen(marker, previous, next rune) bool {
+	previousWhitespace := unicode.IsSpace(previous)
+	nextWhitespace := unicode.IsSpace(next)
+	previousPunctuation := unicode.IsPunct(previous) || unicode.IsSymbol(previous)
+	nextPunctuation := unicode.IsPunct(next) || unicode.IsSymbol(next)
+	leftFlanking := !nextWhitespace && (!nextPunctuation || previousWhitespace || previousPunctuation)
+	rightFlanking := !previousWhitespace && (!previousPunctuation || nextWhitespace || nextPunctuation)
+	if marker == '_' {
+		return leftFlanking && (!rightFlanking || previousPunctuation)
+	}
+	return leftFlanking
 }
 
 func (s *renderState) inlineDelimiter(node ast.Node, length int) string {

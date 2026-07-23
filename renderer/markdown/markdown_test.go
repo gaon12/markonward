@@ -713,6 +713,15 @@ func TestDeepNestedEmphasisProtectsDistantAncestorMarker(t *testing.T) {
 	}
 }
 
+func TestSharedNestedLayerAfterPrefixUsesAlternateMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*!**0****0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*\\!__00__*\n" || second != first {
+		t.Fatalf("shared nested layer after prefix: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")
