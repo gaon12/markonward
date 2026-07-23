@@ -384,6 +384,16 @@ func (s *renderState) simpleFactoredFormattingSibling(firstID ast.NodeID) (ast.N
 }
 
 func (s *renderState) inlineSimpleFactoredFormatting(first, last, nested ast.NodeID) error {
+	if !s.startsWithWordLikeText(s.document.Node(nested)) {
+		// The combined asterisk run needed to factor this recovered structure
+		// is parsed differently when its nested emphasis begins with punctuation.
+		// Preserve the visible content locally instead of emitting a delimiter
+		// sequence that changes shape on the next normalization pass.
+		if err := s.flattenFormatting(first); err != nil {
+			return err
+		}
+		return s.flattenFormatting(last)
+	}
 	// The recovered strong's emphasis child and its emphasis sibling represent
 	// one semantic layer. Render that layer once around both text segments and
 	// retain the strong layer around only the second segment.

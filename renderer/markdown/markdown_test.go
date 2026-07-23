@@ -731,6 +731,15 @@ func TestNestedStrongUsesRenderedParentMarker(t *testing.T) {
 	}
 }
 
+func TestRecoveredFactoringWithLeadingPunctuationIsFlattened(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0***_!_")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0\\!\n" || second != first {
+		t.Fatalf("leading-punctuation recovered factoring: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")
