@@ -686,6 +686,15 @@ func TestMergedGroupAlternatesNestedMarkerAfterPlainContent(t *testing.T) {
 	}
 }
 
+func TestCollapsedFormattingUsesRenderedWhitespaceEdge(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*__&}}}}\x00_ 00\x00_")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***&\\}\\}\\}\\}\x00 00\x00***\n" || second != first {
+		t.Fatalf("collapsed formatting whitespace edge: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")

@@ -1556,6 +1556,17 @@ func (s *renderState) atRenderedFormattingLeadingEdge(parent, node ast.Node) boo
 	if !s.atFormattingLeadingEdge(parent, node) {
 		return false
 	}
+	if s.isCollapsedFormatting(parent) {
+		ancestorID := parent.Parent()
+		if ancestorID == ast.NoNode {
+			return false
+		}
+		ancestor := s.document.Node(ancestorID)
+		if !isFormattingKind(ancestor.Kind()) {
+			return false
+		}
+		return s.atRenderedFormattingLeadingEdge(ancestor, parent)
+	}
 	if len(s.inlineStack) == 0 {
 		return true
 	}
@@ -1576,6 +1587,17 @@ func (s *renderState) atFormattingTrailingEdge(parent, node ast.Node) bool {
 func (s *renderState) atRenderedFormattingTrailingEdge(parent, node ast.Node) bool {
 	if !s.atFormattingTrailingEdge(parent, node) {
 		return false
+	}
+	if s.isCollapsedFormatting(parent) {
+		ancestorID := parent.Parent()
+		if ancestorID == ast.NoNode {
+			return false
+		}
+		ancestor := s.document.Node(ancestorID)
+		if !isFormattingKind(ancestor.Kind()) {
+			return false
+		}
+		return s.atRenderedFormattingTrailingEdge(ancestor, parent)
 	}
 	if len(s.inlineStack) == 0 {
 		return true
