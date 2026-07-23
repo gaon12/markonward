@@ -1263,12 +1263,16 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 		astParent := s.document.Node(node.Parent())
 		onlyChild := astParent.FirstChild() == node.ID() && astParent.LastChild() == node.ID()
 		switch {
-		case node.Kind() == ast.Strong && parent.kind == ast.Strong && onlyChild:
-			// A collapsed recovery ancestor can make the rendered parent differ
+		case node.Kind() == ast.Strong && parent.kind == ast.Strong:
+			// A collapsed or merged ancestor can make the rendered parent differ
 			// from the AST parent used by effectiveInlineDelimiterMarker. Combine
-			// an only-child strong run with the marker actually written by that
-			// rendered parent so a second parse chooses the same four-delimiter run.
-			marker = string(parent.marker)
+			// an only-child run with the actual parent marker; otherwise separate
+			// a partial nested range by alternating that marker.
+			if onlyChild {
+				marker = string(parent.marker)
+			} else if marker[0] == parent.marker {
+				marker = alternateInlineDelimiterMarker(marker)
+			}
 		case node.Kind() == ast.Strong && parent.kind == ast.Emphasis:
 			onlyChildAfterControls := !onlyChild && s.onlyChildAfterMovingControls(node)
 			combine := (onlyChild && !parent.hasPreceding || onlyChildAfterControls) && !parent.hasFollowing

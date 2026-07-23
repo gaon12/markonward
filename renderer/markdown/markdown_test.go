@@ -794,6 +794,15 @@ func TestNestedEmphasisUsesRenderedStrongParentMarker(t *testing.T) {
 	}
 }
 
+func TestPartialNestedStrongAlternatesRenderedParentMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0**!****0**0**")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*0\\!__**0**&#48;__*\n" || second != first {
+		t.Fatalf("partial nested strong marker: first=%q second=%q", first, second)
+	}
+}
+
 func TestOnlyChildDeepEmphasisCombinesOneMarkerRun(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_*_0_*_")
