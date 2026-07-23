@@ -1230,6 +1230,12 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 		astParent := s.document.Node(node.Parent())
 		onlyChild := astParent.FirstChild() == node.ID() && astParent.LastChild() == node.ID()
 		switch {
+		case node.Kind() == ast.Strong && parent.kind == ast.Strong && onlyChild:
+			// A collapsed recovery ancestor can make the rendered parent differ
+			// from the AST parent used by effectiveInlineDelimiterMarker. Combine
+			// an only-child strong run with the marker actually written by that
+			// rendered parent so a second parse chooses the same four-delimiter run.
+			marker = string(parent.marker)
 		case node.Kind() == ast.Strong && parent.kind == ast.Emphasis:
 			combine := (onlyChild || s.onlyChildAfterMovingControls(node)) && !parent.hasPreceding && !parent.hasFollowing
 			if combine {

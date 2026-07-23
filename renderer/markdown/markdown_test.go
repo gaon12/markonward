@@ -722,6 +722,15 @@ func TestSharedNestedLayerAfterPrefixUsesAlternateMarker(t *testing.T) {
 	}
 }
 
+func TestNestedStrongUsesRenderedParentMarker(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*!_!_____0_____ ")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*\\!\\!____0____*\n" || second != first {
+		t.Fatalf("nested strong rendered-parent marker: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")
