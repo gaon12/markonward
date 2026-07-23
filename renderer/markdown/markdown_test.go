@@ -488,6 +488,15 @@ func TestNestedEmptyListsDoNotBecomeThematicBreak(t *testing.T) {
 	}
 }
 
+func TestThematicBreakInListKeepsItsBlockBoundary(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "+ ***")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "- ***\n" || second != first {
+		t.Fatalf("list thematic-break normalization: first=%q second=%q", first, second)
+	}
+}
+
 func TestOuterBoundaryAccountsForEntityOnlyFirstChild(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "0*0*****0")
@@ -1088,6 +1097,15 @@ func TestFactoredStrongInsideUnderscoreEmphasisUsesAsterisk(t *testing.T) {
 	second := normalize(t, profile.EnhanceMarkV1, first)
 	if first != "_0**00**_\n" || second != first {
 		t.Fatalf("factored strong in underscore emphasis: first=%q second=%q", first, second)
+	}
+}
+
+func TestStrongBeforeControlAndWhitespaceUsesAsterisk(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "***0**\x00 0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "***0**\x00 0*\n" || second != first {
+		t.Fatalf("strong before control and whitespace: first=%q second=%q", first, second)
 	}
 }
 

@@ -565,8 +565,7 @@ func (s *renderState) formattingGroupFollowingControlNeedsAsterisk(current, last
 				if controlCount == 0 {
 					return true, false
 				}
-				wordLike := !unicode.IsSpace(currentRune) && !unicode.IsPunct(currentRune) && !unicode.IsSymbol(currentRune)
-				return true, wordLike
+				return true, true
 			}
 			return false, false
 		}
@@ -1930,7 +1929,7 @@ func (s *renderState) followedByUnrepresentableControl(node ast.Node) bool {
 				if controlCount == 0 {
 					return false
 				}
-				return !unicode.IsSpace(current) && !unicode.IsPunct(current) && !unicode.IsSymbol(current)
+				return true
 			}
 		}
 		parentID := s.document.Node(branch).Parent()
@@ -2420,6 +2419,15 @@ func (s *renderState) renderList(list ast.NodeID, depth int) error {
 		}
 		lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 		for lineIndex, line := range lines {
+			// A dash list marker followed by the canonical dash thematic break
+			// ("- ---") is itself a thematic break. Use the equivalent asterisk
+			// spelling so the block remains inside the list on the next parse.
+			if !ordered && marker == "-" && lineIndex == 0 && line == "---" {
+				firstChild := s.document.Node(item).FirstChild()
+				if firstChild != ast.NoNode && s.document.Node(firstChild).Kind() == ast.ThematicBreak {
+					line = "***"
+				}
+			}
 			if line == "" && lineIndex != 0 {
 				s.output.WriteByte('\n')
 				continue
