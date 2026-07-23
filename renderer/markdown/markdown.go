@@ -1218,7 +1218,8 @@ func (s *renderState) inlineDelimiter(node ast.Node, length int) string {
 				marker = alternateInlineDelimiterMarker(marker)
 			}
 		case node.Kind() == ast.Emphasis && parent.kind == ast.Emphasis:
-			if marker[0] == parent.marker && (!parent.merged || !parent.hasPreceding) {
+			reuseMergedMarker := parent.merged && parent.hasPreceding && endsWithUnescapedFormattingDelimiter(s.output.String())
+			if marker[0] == parent.marker && !reuseMergedMarker {
 				marker = alternateInlineDelimiterMarker(marker)
 			}
 			adjustedForParent = true

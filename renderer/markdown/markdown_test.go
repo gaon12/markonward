@@ -677,6 +677,15 @@ func TestMergedGroupKeepsNestedMarkerAfterEarlierMember(t *testing.T) {
 	}
 }
 
+func TestMergedGroupAlternatesNestedMarkerAfterPlainContent(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0**!*0**!*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*0\\!_0\\!_*\n" || second != first {
+		t.Fatalf("nested emphasis after plain merged content: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")
