@@ -767,6 +767,15 @@ func TestMultilineSetextHeadingRemainsOneBlock(t *testing.T) {
 	}
 }
 
+func TestCollapsedStrikethroughControlNeedsNoLeadingEntity(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "0~~\x00~0")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "0~~\x000~~\n" || second != first {
+		t.Fatalf("collapsed strikethrough control boundary: first=%q second=%q", first, second)
+	}
+}
+
 func TestOnlyChildDeepEmphasisCombinesOneMarkerRun(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_*_0_*_")

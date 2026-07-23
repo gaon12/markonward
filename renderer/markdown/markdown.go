@@ -1095,7 +1095,7 @@ func (s *renderState) inlineOpeningNeedsProtection(node ast.Node, marker byte) b
 		firstID = first.NextSibling()
 		first = s.document.Node(firstID)
 	}
-	for (first.Kind() == ast.Emphasis || first.Kind() == ast.Strong) && s.hasDuplicateRecoveredLayer(first) {
+	for s.isCollapsedFormatting(first) {
 		firstID = first.FirstChild()
 		if firstID == ast.NoNode {
 			return false
@@ -1819,6 +1819,10 @@ func (s *renderState) startsWithDirectUnrepresentableControl(node ast.Node) bool
 			}
 			current, _ := utf8.DecodeRuneInString(child.Text())
 			return unicode.IsControl(current) && !numericEntityRoundTrips(current)
+		}
+		if child.Kind() == ast.Strikethrough && s.hasStrikethroughAncestor(child) {
+			container = child
+			continue
 		}
 		if !isEmphasisKind(child.Kind()) {
 			return false

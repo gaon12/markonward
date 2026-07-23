@@ -164,6 +164,7 @@ func FuzzParseRenderRoundTrip(f *testing.F) {
 		"**0****0****\x00**",
 		"[](\\()",
 		"0\n0\n=",
+		"0~~\x00~0",
 	}
 	for _, seed := range seeds {
 		f.Add([]byte(seed))
