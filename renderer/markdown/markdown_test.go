@@ -632,6 +632,24 @@ func TestControlOnlyMergedMemberMovesInsideNestedDelimiter(t *testing.T) {
 	}
 }
 
+func TestRecoveredStrongFactorsSharedEmphasisSibling(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0***_0_")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*0**0***\n" || second != first {
+		t.Fatalf("recovered strong with shared emphasis sibling: first=%q second=%q", first, second)
+	}
+}
+
+func TestMergedFormattingGroupSharesNestedLayerAfterTextPrefix(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0**0****0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*0**00***\n" || second != first {
+		t.Fatalf("merged group with prefixed shared formatting: first=%q second=%q", first, second)
+	}
+}
+
 func TestRecoveredFactoringWithPunctuationIsFlattened(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_0_*_!0")

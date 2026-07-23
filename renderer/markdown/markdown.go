@@ -333,6 +333,13 @@ func (s *renderState) flattenFormatting(parent ast.NodeID) error {
 
 func (s *renderState) inlines(parent ast.NodeID) error {
 	for child := s.document.Node(parent).FirstChild(); child != ast.NoNode; {
+		if next, nested, ok := s.simpleFactoredFormattingSibling(child); ok {
+			if err := s.inlineSimpleFactoredFormatting(child, next, nested); err != nil {
+				return err
+			}
+			child = s.document.Node(next).NextSibling()
+			continue
+		}
 		last := s.lastMergeableFormattingSibling(child)
 		if len(s.inlineStack) != 0 && s.inlineStack[len(s.inlineStack)-1].owner == parent {
 			s.inlineStack[len(s.inlineStack)-1].hasPreceding = child != s.document.Node(parent).FirstChild()
@@ -350,6 +357,54 @@ func (s *renderState) inlines(parent ast.NodeID) error {
 		}
 		child = s.document.Node(child).NextSibling()
 	}
+	return nil
+}
+
+func (s *renderState) simpleFactoredFormattingSibling(firstID ast.NodeID) (ast.NodeID, ast.NodeID, bool) {
+	first := s.document.Node(firstID)
+	firstTextID := first.FirstChild()
+	if first.Kind() != ast.Emphasis || firstTextID == ast.NoNode || firstTextID != first.LastChild() || s.document.Node(firstTextID).Kind() != ast.Text {
+		return ast.NoNode, ast.NoNode, false
+	}
+	nextID := first.NextSibling()
+	if nextID == ast.NoNode {
+		return ast.NoNode, ast.NoNode, false
+	}
+	next := s.document.Node(nextID)
+	nestedID := next.FirstChild()
+	if next.Kind() != ast.Strong || next.Flags()&ast.InlineRecoveredDelimiter == 0 || nestedID == ast.NoNode || nestedID != next.LastChild() {
+		return ast.NoNode, ast.NoNode, false
+	}
+	nested := s.document.Node(nestedID)
+	nestedTextID := nested.FirstChild()
+	if nested.Kind() != ast.Emphasis || nestedTextID == ast.NoNode || nestedTextID != nested.LastChild() || s.document.Node(nestedTextID).Kind() != ast.Text {
+		return ast.NoNode, ast.NoNode, false
+	}
+	return nextID, nestedID, true
+}
+
+func (s *renderState) inlineSimpleFactoredFormatting(first, last, nested ast.NodeID) error {
+	// The recovered strong's emphasis child and its emphasis sibling represent
+	// one semantic layer. Render that layer once around both text segments and
+	// retain the strong layer around only the second segment.
+	delimiter := s.inlineDelimiter(s.document.Node(first), 1)
+	s.output.WriteString(delimiter)
+	s.inlineStack = append(s.inlineStack, inlineFrame{owner: ast.NoNode, kind: ast.Emphasis, marker: delimiter[0], merged: true})
+	defer func() { s.inlineStack = s.inlineStack[:len(s.inlineStack)-1] }()
+	if err := s.inlines(first); err != nil {
+		return err
+	}
+	strongDelimiter := strings.Repeat(string(delimiter[0]), 2)
+	s.output.WriteString(strongDelimiter)
+	s.inlineStack = append(s.inlineStack, inlineFrame{owner: ast.NoNode, kind: ast.Strong, marker: delimiter[0], merged: true})
+	err := s.inlines(nested)
+	s.inlineStack = s.inlineStack[:len(s.inlineStack)-1]
+	if err != nil {
+		return err
+	}
+	s.output.WriteString(strongDelimiter)
+	s.stabilizeClosingBoundary(s.document.Node(last), rune(delimiter[0]))
+	s.output.WriteString(delimiter)
 	return nil
 }
 
@@ -458,9 +513,14 @@ func (s *renderState) sharedSimpleFormattingChildKind(first, last ast.NodeID) (a
 	sharedKind := ast.Invalid
 	for current := first; ; current = s.document.Node(current).NextSibling() {
 		node := s.document.Node(current)
-		childID := node.FirstChild()
-		if node.Kind() != outerKind || childID == ast.NoNode || childID != node.LastChild() {
+		childID := node.LastChild()
+		if node.Kind() != outerKind || childID == ast.NoNode {
 			return ast.Invalid, false
+		}
+		for prefixID := node.FirstChild(); prefixID != childID; prefixID = s.document.Node(prefixID).NextSibling() {
+			if current != first || s.document.Node(prefixID).Kind() != ast.Text {
+				return ast.Invalid, false
+			}
 		}
 		child := s.document.Node(childID)
 		textID := child.FirstChild()
@@ -479,12 +539,18 @@ func (s *renderState) sharedSimpleFormattingChildKind(first, last ast.NodeID) (a
 }
 
 func (s *renderState) inlineSharedFormattingChildren(first, last ast.NodeID, kind ast.Kind, marker byte) error {
+	firstNode := s.document.Node(first)
+	for prefixID := firstNode.FirstChild(); prefixID != firstNode.LastChild(); prefixID = s.document.Node(prefixID).NextSibling() {
+		if err := s.inline(prefixID); err != nil {
+			return err
+		}
+	}
 	delimiter := strings.Repeat(string(marker), delimiterLength(kind))
 	s.output.WriteString(delimiter)
 	s.inlineStack = append(s.inlineStack, inlineFrame{owner: ast.NoNode, kind: kind, marker: marker, merged: true})
 	defer func() { s.inlineStack = s.inlineStack[:len(s.inlineStack)-1] }()
 	for current := first; ; current = s.document.Node(current).NextSibling() {
-		childID := s.document.Node(current).FirstChild()
+		childID := s.document.Node(current).LastChild()
 		if err := s.inlines(childID); err != nil {
 			return err
 		}
