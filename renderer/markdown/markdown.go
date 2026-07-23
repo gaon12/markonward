@@ -935,7 +935,7 @@ func (s *renderState) inline(id ast.NodeID) error { //nolint:gocyclo // The swit
 			return s.inlines(id)
 		}
 		delimiter := "~~"
-		if node.Flags()&ast.StrikethroughSingleDelimiter != 0 {
+		if node.Flags()&ast.StrikethroughSingleDelimiter != 0 && !s.singleTildeOpeningRangeConflict(node) {
 			delimiter = "~"
 		}
 		return s.inlineContainer(id, delimiter, delimiter)
@@ -1006,6 +1006,15 @@ func (s *renderState) inline(id ast.NodeID) error { //nolint:gocyclo // The swit
 		return fmt.Errorf("markdown: unsupported inline node %s", node.Kind())
 	}
 	return nil
+}
+
+func (s *renderState) singleTildeOpeningRangeConflict(node ast.Node) bool {
+	output := s.output.String()
+	if output == "" || !s.startsWithWordLikeText(node) {
+		return false
+	}
+	previous, _ := utf8.DecodeLastRuneInString(output)
+	return unicode.IsLetter(previous) || unicode.IsNumber(previous)
 }
 
 func (s *renderState) prepareCollapsedFormatting(node ast.Node) {

@@ -803,6 +803,15 @@ func TestPartialNestedStrongAlternatesRenderedParentMarker(t *testing.T) {
 	}
 }
 
+func TestSingleTildeAfterRangeOperandUsesDoubleDelimiter(t *testing.T) {
+	t.Parallel()
+	first := normalize(t, profile.EnhanceMarkV1, "*0**~0*")
+	second := normalize(t, profile.EnhanceMarkV1, first)
+	if first != "*0~~0~~*\n" || second != first {
+		t.Fatalf("single tilde after range operand: first=%q second=%q", first, second)
+	}
+}
+
 func TestOnlyChildDeepEmphasisCombinesOneMarkerRun(t *testing.T) {
 	t.Parallel()
 	first := normalize(t, profile.EnhanceMarkV1, "_*_0_*_")
