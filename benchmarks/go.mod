@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/gaon12/markonward v0.0.0
-	github.com/yuin/goldmark v1.8.4
+	github.com/yuin/goldmark v1.8.6
 )
 
 replace github.com/gaon12/markonward => ..
